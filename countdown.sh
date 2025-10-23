@@ -14,35 +14,44 @@ set -u
 # --- help message ------------------------------------------------------------
 show_help() {
   cat <<'EOF'
-Usage: countdown.sh TIME|DURATION [FONT] [OPTIONS]
+Usage: countdown.sh [DURATION] [OPTIONS]
+
+Notes:
+  Supply a duration positionally or use -u/--until to target a clock time.
 
 DURATION formats:
-  SS                  seconds (e.g., 45)
-  MM:SS               minutes:seconds (e.g., 3:15)
-  HH:MM:SS            hours:minutes:seconds (e.g., 1:02:30)
-  Xm | Xh | Xs        unit-suffixed minutes/hours/seconds (e.g., 45m, 2h, 90s)
-  1h30m20s            combined units (H/M/S in any order; case-insensitive)
-  PT1H30M20S          ISO 8601 duration (P=period, T=time part, H/M/S units)
+  SS                          seconds (e.g., 45)
+  MM:SS                       minutes:seconds (e.g., 3:15)
+  HH:MM:SS                    hours:minutes:seconds (e.g., 1:02:30)
+  Xm | Xh | Xs                unit-suffixed minutes/hours/seconds (e.g., 45m, 2h, 90s)
+  1h30m20s                    combined units (H/M/S in any order; case-insensitive)
+  PT1H30M20S                  ISO 8601 duration (P=period, T=time part, H/M/S units)
 
 TIME (end time):
-  --until=HH:MM[:SS]              today at that time (tomorrow if already past)
-  --until=YYYY-MM-DDTHH:MM[:SS]   explicit date/time (ISO-ish)
+  -u TIME, --until=TIME       today at that time (tomorrow if already past)
+  --until=YYYY-MM-DDTHH:MM[:SS]
+                              explicit date/time (ISO-ish)
 
 Options:
-  --clear                Clear screen each second instead of scrolling
-  --left                 Left-align output (default is centered)
-  --throttle=SECONDS     Delay between lines for cinematic output (default: 0.05)
-  --message="text"       Custom final message (default: TIME'S UP!)
-  --done-cmd='cmd'       Run a command when the timer finishes (async)
-  --nosound              Disable finish sound
-  --no-title             Do not update the terminal/tab title
-  --yes                  Auto-confirm prompts (e.g., very long --until)
-  -h, --help             Show this help message
+  -c, --clear                 Clear screen each second instead of scrolling
+  -l, --left                  Left-align output (default is centered)
+  -t SECONDS, --throttle=SECONDS
+                              Delay between lines for cinematic output (default: 0.05)
+  -m TEXT, --message="text"
+                              Custom final message (default: TIME'S UP!)
+  -d CMD, --done-cmd='cmd'
+                              Run a command when the timer finishes (async)
+  -f FONT, --font=FONT        Use a specific toilet font (default: smblock)
+  -n, --nosound               Disable finish sound
+  -T, --no-title              Do not update the terminal/tab title
+  -y, --yes                   Auto-confirm prompts (e.g., very long --until)
+  -u TIME, --until=TIME       End at a specific clock time (see TIME formats above)
+  -h, --help                  Show this help message
 
 Examples:
   countdown.sh 45
-  countdown.sh 3:15 smblock --clear
-  countdown.sh 10:00 future --throttle=0.1
+  countdown.sh 3:15 --font smblock --clear
+  countdown.sh 10:00 --font future --throttle=0.1
   countdown.sh 1h30m --message="Break" --done-cmd='notify-send "Break" "Timer done"'
   countdown.sh --until=23:30      # until 23:30 today (or tomorrow if past)
   countdown.sh --until=2025-10-23T14:00
@@ -144,18 +153,28 @@ while [[ $# -gt 0 ]]; do
       done_cmd="${2:-}"; if [[ -z "$done_cmd" || "$done_cmd" == -* ]]; then echo "Error: $1 requires a value" >&2; exit 2; fi; shift 2 ;;
     --done-cmd=*) done_cmd="${1#*=}"; shift ;;
 
+    -f|--font)
+      font="${2:-}"; if [[ -z "$font" || "$font" == -* ]]; then echo "Error: $1 requires a value" >&2; exit 2; fi; shift 2 ;;
+    --font=*)
+      font="${1#*=}"; shift ;;
+
     --) shift; while [[ $# -gt 0 ]]; do positionals+=("$1"); shift; done ;;
     -*) echo "Unknown option: $1" >&2; exit 2 ;;
     *) positionals+=("$1"); shift ;;
   esac
 done
 
-# Positional handling: [TIME|DURATION] [FONT]
+# Positional handling: TIME|DURATION only
+usage_msg="Usage: $0 [DURATION] [OPTIONS]  (try --help)"
+if [[ ${#positionals[@]} -gt 1 ]]; then
+  echo "Error: Too many positional arguments. Use -f/--font to set the font." >&2
+  echo "$usage_msg" >&2
+  exit 2
+fi
 first=""; [[ ${#positionals[@]} -ge 1 ]] && first="${positionals[0]}"
 if [[ -z "$first" && -z "$until_str" ]]; then
-  echo "Usage: $0 TIME|DURATION [FONT] [OPTIONS]  (try --help)" >&2; exit 1
+  echo "$usage_msg" >&2; exit 1
 fi
-[[ ${#positionals[@]} -ge 2 ]] && font="${positionals[1]}"
 
 maybe_clear(){ $clear_enabled && clear || echo; }
 
