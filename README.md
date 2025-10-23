@@ -36,10 +36,10 @@ Accurate timing is handled by **`sleepenh`**, so even throttled output stays in 
 Install all required packages:
 
 ```bash
-sudo apt install toilet lolcat sleepenh
+sudo apt install toilet lolcat
 ```
 
-If they are not installed, anyway, the script will gracefully tell you.
+or your preferred package manager. If they are not installed, the script will gracefully tell you.
 
 ---
 
@@ -80,6 +80,3 @@ bash test_countdown.sh
 
 - Move font argument from positional to `--font` / `-f`.
 - Add `--no-color` option to disable `lolcat` color piping.
-- Improve dependency checks to list all missing packages at once and suggest a single `sudo apt install` command.
-- Write and use an in-script function to replace `sleepenh` so that it will become usable also on non-Debian distros.
-
