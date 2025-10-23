@@ -39,6 +39,8 @@ Install all required packages:
 sudo apt install toilet lolcat sleepenh
 ```
 
+If they are not installed, anyway, the script will gracefully tell you.
+
 ---
 
 #### 🤖 Examples
@@ -73,3 +75,10 @@ Run it from the same directory:
 ```bash
 bash test_countdown.sh
 ```
+
+#### 🚧 Planned improvements
+
+- Move font argument from positional to `--font` / `-f`.
+- Add `--no-color` option to disable `lolcat` color piping.
+- Improve dependency checks to list all missing packages at once and suggest a single `sudo apt install` command.
+
