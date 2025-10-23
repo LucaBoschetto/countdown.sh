@@ -81,4 +81,5 @@ bash test_countdown.sh
 - Move font argument from positional to `--font` / `-f`.
 - Add `--no-color` option to disable `lolcat` color piping.
 - Improve dependency checks to list all missing packages at once and suggest a single `sudo apt install` command.
+- Write and use an in-script function to replace `sleepenh` so that it will become usable also on non-Debian distros.
 
