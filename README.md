@@ -67,7 +67,7 @@ sudo apt install toilet lolcat sleepenh
 
 #### 🧪 Testing
 
-An optional regression suite (`test_countdown_live.sh`) exercises all input formats and logic paths.
+An optional regression suite (`test_countdown.sh`) exercises all input formats and logic paths.
 Run it from the same directory:
 
 ```bash
