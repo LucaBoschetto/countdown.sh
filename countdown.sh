@@ -1,47 +1,4 @@
 #!/usr/bin/env bash
-# --- portable sleepenh shim (Linux) ------------------------------------------
-# Emulates:
-#   sleepenh 0            -> prints a monotonic "now" timestamp
-#   sleepenh PREV STEP    -> sleeps until PREV+STEP, prints that target
-# Notes:
-# - Uses /proc/uptime (monotonic since boot). No external deps.
-# - On SIGINT, `sleep` returns non-zero; we propagate that exit code.
-# - Always prints the target timestamp on success.
-sleepenh() {
-  case "$#" in
-    1)
-      if [[ "$1" == "0" ]]; then
-        # monotonic "now"
-        awk '{printf "%.9f\n",$1}' /proc/uptime
-      else
-        echo "sleepenh: invalid usage (expected: 0)" >&2
-        return 2
-      fi
-      ;;
-    2)
-      local prev="$1" step="$2"
-      # basic numeric validation
-      awk -v p="$prev" -v s="$step" 'BEGIN{exit (p==p+0 && s==s+0)?0:1}' \
-        || { echo "sleepenh: non-numeric args" >&2; return 2; }
-
-      local target now rem
-      target=$(awk -v p="$prev" -v s="$step" 'BEGIN{printf "%.9f", p+s}')
-      now=$(awk '{printf "%.9f",$1}' /proc/uptime)
-      rem=$(awk -v t="$target" -v n="$now" 'BEGIN{r=t-n; if (r<0) r=0; printf "%.9f", r}')
-
-      # sleep remaining time (if any). If interrupted, propagate.
-      if awk -v r="$rem" 'BEGIN{exit (r>0)?0:1}'; then
-        sleep "$rem" || return $?
-      fi
-
-      printf '%s\n' "$target"
-      ;;
-    *)
-      echo "sleepenh: usage: sleepenh 0 | sleepenh <prev_ts> <step>" >&2
-      return 2
-      ;;
-  esac
-}
 # Countdown with toilet + global lolcat gradient and cinematic throttling
 # - Computes end timestamp once; each frame shows end-now (always in sync)
 # - One frame per second; per-line throttle capped so a frame <~ 0.9s
@@ -93,10 +50,67 @@ EOF
 }
 [[ ${1:-} == "-h" || ${1:-} == "--help" ]] && { show_help; exit 0; }
 
+# --- portable sleepenh shim (Linux) ------------------------------------------
+# Emulates:
+#   sleepenh 0            -> prints a monotonic "now" timestamp
+#   sleepenh PREV STEP    -> sleeps until PREV+STEP, prints that target
+# Notes:
+# - Uses /proc/uptime (monotonic since boot). No external deps.
+# - On SIGINT, `sleep` returns non-zero; we propagate that exit code.
+# - Always prints the target timestamp on success.
+sleepenh() {
+  case "$#" in
+    1)
+      if [[ "$1" == "0" ]]; then
+        # monotonic "now"
+        awk '{printf "%.9f\n",$1}' /proc/uptime
+      else
+        echo "sleepenh: invalid usage (expected: 0)" >&2
+        return 2
+      fi
+      ;;
+    2)
+      local prev="$1" step="$2"
+      # basic numeric validation
+      awk -v p="$prev" -v s="$step" 'BEGIN{exit (p==p+0 && s==s+0)?0:1}' \
+        || { echo "sleepenh: non-numeric args" >&2; return 2; }
+
+      local target now rem
+      target=$(awk -v p="$prev" -v s="$step" 'BEGIN{printf "%.9f", p+s}')
+      now=$(awk '{printf "%.9f",$1}' /proc/uptime)
+      rem=$(awk -v t="$target" -v n="$now" 'BEGIN{r=t-n; if (r<0) r=0; printf "%.9f", r}')
+
+      # sleep remaining time (if any). If interrupted, propagate.
+      if awk -v r="$rem" 'BEGIN{exit (r>0)?0:1}'; then
+        sleep "$rem" || return $?
+      fi
+
+      printf '%s\n' "$target"
+      ;;
+    *)
+      echo "sleepenh: usage: sleepenh 0 | sleepenh <prev_ts> <step>" >&2
+      return 2
+      ;;
+  esac
+}
+
 # --- dependency preflight ----------------------------------------------------
-for dep in toilet lolcat; do
-  command -v "$dep" >/dev/null 2>&1 || { echo "Missing '$dep'. Install with: sudo apt install $dep" >&2; exit 1; }
+deps=(toilet lolcat)
+missing=()
+for dep in "${deps[@]}"; do
+  if ! command -v "$dep" >/dev/null 2>&1; then
+    missing+=("$dep")
+  fi
 done
+if ((${#missing[@]})); then
+  printf "Missing dependencies: %s\n" "${missing[*]}" >&2
+  printf "Install them with one of:\n" >&2
+  printf "  sudo apt install %s\n"   "${missing[*]}" >&2
+  printf "  sudo pacman -S %s\n"     "${missing[*]}" >&2
+  printf "  sudo dnf install %s\n"   "${missing[*]}" >&2
+  printf "  sudo zypper install %s\n" "${missing[*]}" >&2
+  exit 1
+fi
 
 # ----- args (shift-based parser; supports -t 0.05 and long/short forms) -----
 # Defaults
