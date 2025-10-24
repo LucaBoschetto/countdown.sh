@@ -80,3 +80,4 @@ bash test_countdown.sh
 
 - Add `--no-color` option to disable `lolcat` color piping.
 - Add the spread and frequency options to pass to lolcat.
+- Add a config file to change defaults for scroll vs. clear, for center vs. left, for throttle, for the final message, for the finish sound on/off, for color vs. no-color, for spread and frequency.
