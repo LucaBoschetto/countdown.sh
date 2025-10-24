@@ -287,9 +287,10 @@ if command -v lolcat >/dev/null 2>&1; then
 fi
 
 # Clean traps: reset title on exit; on Ctrl-C, reset title then exit 130
+reset_title() { printf ']0;' 1>&2; }
 if $title_on; then
-  trap 'printf "]0;" 1>&2' EXIT
-  trap '$title_on && printf "]0;" 1>&2; echo; echo "[Interrupted]"; exit 130' INT
+  trap 'reset_title' EXIT
+  trap 'reset_title; echo; echo "[Interrupted]"; exit 130' INT
 else
   trap 'echo; echo "[Interrupted]"; exit 130' INT
 fi
