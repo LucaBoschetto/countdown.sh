@@ -69,7 +69,7 @@ or your preferred package manager. If they are not installed, the script will gr
 
 #### 🧪 Testing
 
-An optional regression suite (`test_countdown.sh`) exercises all input formats and logic paths.
+An optional test suite (`test_countdown.sh`) exercises all input formats and logic paths.
 Run it from the same directory:
 
 ```bash
@@ -79,4 +79,4 @@ bash test_countdown.sh
 #### 🚧 Planned improvements
 
 - Add `--no-color` option to disable `lolcat` color piping.
-- Add the spread and frequency options to pass to lolcat
+- Add the spread and frequency options to pass to lolcat.
