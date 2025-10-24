@@ -21,7 +21,7 @@ Accurate timing is handled by **`sleepenh`**, so even throttled output stays in 
   (with optional confirmation or automatic notice)
 * Adjustable **`--throttle`** (default **0.05s**) for smooth scrolling output
 * **Centered output** by default (`--left` available)
-* Default **font:** `standard` (you can specify any installed toilet font)
+* Default **font:** `smblock` (you can specify any installed toilet font)
 * Optional **`--clear`** for classic flicker updates
 * Optional **sound at completion** (multiple fallback methods)
 * **`--message`** to display a custom end screen
@@ -56,7 +56,7 @@ or your preferred package manager. If they are not installed, the script will gr
 ./countdown.sh PT2H30M
 
 # Use a different font and clear screen each tick
-./countdown.sh 3:00 digital --clear
+./countdown.sh 3:00 --font digital --clear
 
 # Run a command when finished
 ./countdown.sh 5 --done-cmd 'notify-send "Countdown finished!"'
