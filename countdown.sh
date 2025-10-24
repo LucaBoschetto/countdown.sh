@@ -216,6 +216,7 @@ now_epoch() { date +%s; }
 
 # Tracks whether --until HH:MM[:SS] rolled to tomorrow
 rolled_to_tomorrow=false
+parsed_end_wall=0
 parse_until() {
   local u="$1" now ts
   rolled_to_tomorrow=false
@@ -229,12 +230,14 @@ parse_until() {
       end=$(( end + 86400 ))
       rolled_to_tomorrow=true
     fi
-    echo "$end"; return 0
+    parsed_end_wall=$end
+    return 0
   fi
   # Full datetime via `date -d`
   if date -d "$u" +%s >/dev/null 2>&1; then
     ts=$(date -d "$u" +%s)
-    echo "$ts"; return 0
+    parsed_end_wall=$ts
+    return 0
   fi
   return 1
 }
@@ -247,9 +250,10 @@ if [[ -n "$until_str" ]]; then
       echo "Note: both duration ('$first') and --until given; using --until." >&2
     fi
   fi
-  if ! end_wall=$(parse_until "$until_str"); then
+  if ! parse_until "$until_str"; then
     echo "Invalid --until value. Use HH:MM[:SS] or YYYY-MM-DDTHH:MM[:SS]" >&2; exit 1
   fi
+  end_wall=$parsed_end_wall
   T=$(( end_wall - start_wall )); (( T < 0 )) && T=0
   # If the computed target is far in the future (e.g., past time -> tomorrow), confirm
   threshold=$((21*3600))
