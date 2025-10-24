@@ -78,6 +78,5 @@ bash test_countdown.sh
 
 #### 🚧 Planned improvements
 
-- Move font argument from positional to `--font` / `-f`.
 - Add `--no-color` option to disable `lolcat` color piping.
 - Add the spread and frequency options to pass to lolcat
