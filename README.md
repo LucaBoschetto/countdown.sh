@@ -3,7 +3,7 @@
 A feature-rich, fully terminal-based countdown timer for Linux.
 
 Uses **`toilet`** for text rendering and **`lolcat`** for smooth color gradients.
-Accurate timing is handled by **`sleepenh`**, so even throttled output stays in sync with real time.
+Accurate timing is handled by an in-script functional porting of **`sleepenh`**, so even throttled output stays in sync with real time.
 
 <p align="center">
   <img src="docs/screenshot.png" alt="Screenshot of countdown.sh" width="600"/>
@@ -16,16 +16,17 @@ Accurate timing is handled by **`sleepenh`**, so even throttled output stays in 
   * `SS`, `MM:SS`, `HH:MM:SS`
   * `45m`, `2h`, `1h30m20s`
   * ISO-8601 durations like `PT1H30M20S`
-* `--until=<time>` or full `--until=<YYYY-MM-DDTHH:MM>` target
+* **`-u, --until=<time>`** or full **`-u, --until=<YYYY-MM-DDTHH:MM>`** target
 * Auto-rolls to next day if time is in the past
   (with optional confirmation or automatic notice)
-* Adjustable **`--throttle`** (default **0.05s**) for smooth scrolling output
-* **Centered output** by default (`--left` available)
-* Default **font:** `smblock` (you can specify any installed toilet font)
-* Optional **`--clear`** for classic flicker updates
-* Optional **sound at completion** (multiple fallback methods)
-* **`--message`** to display a custom end screen
-* **`--done-cmd`** to execute a command when time’s up
+* Adjustable **`-t, --throttle`** (default **0.05s**) for smooth scrolling output
+* **Centered output** by default (**`-l, --left`** available)
+* Default **font:** `smblock` (customize via **`-f, --font`**)
+* Optional **`-c, --clear`** for classic flicker updates
+* Optional **sound at completion** (**`-n, --nosound`** to mute; multiple fallback methods)
+* **`-m, --message`** to display a custom end screen
+* **`-d, --done-cmd`** to execute a command when time’s up
+* **`-C, --no-color`** for plain text when gradients aren’t desired
 * Day-aware display for timers exceeding 24h
 * Graceful suspend/resume handling (skips missed seconds)
 
@@ -78,7 +79,6 @@ bash test_countdown.sh
 
 #### 🚧 Planned improvements
 
-- Add `--no-color` option to disable `lolcat` color piping.
 - Add the spread and frequency options to pass to lolcat.
 - Add a config file to change defaults for:
   - scroll vs. clear

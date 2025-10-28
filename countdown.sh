@@ -37,6 +37,7 @@ Options:
   -l, --left                  Left-align output (default is centered)
   -t SECONDS, --throttle=SECONDS
                               Delay between lines for cinematic output (default: 0.05)
+  -C, --no-color              Disable lolcat gradients (plain text colors)
   -m TEXT, --message="text"
                               Custom final message (default: TIME'S UP!)
   -d CMD, --done-cmd='cmd'
@@ -136,6 +137,7 @@ while [[ $# -gt 0 ]]; do
     -n|--nosound) nosound=true; shift ;;
     -T|--no-title) title_on=false; shift ;;
     -y|--yes) assume_yes=true; shift ;;
+    -C|--no-color) use_lolcat=false; shift ;;
 
     -t|--throttle)
       throttle="${2:-}"; if [[ -z "$throttle" || "$throttle" == -* ]]; then echo "Error: $1 requires a value" >&2; exit 2; fi; shift 2 ;;
@@ -182,8 +184,17 @@ if ! [ -t 1 ] || [[ -z ${TERM:-} || $TERM == "dumb" ]]; then
   headless=true
 fi
 if $headless; then
-  if $center || $use_lolcat; then
-    echo "WARNING: running in headless mode: centering and colors ignored" >&2
+  suppressed=()
+  $center && suppressed+=("centering")
+  $use_lolcat && suppressed+=("colors")
+  if ((${#suppressed[@]})); then
+    joiner=" and "
+    if ((${#suppressed[@]} == 2)); then
+      note="${suppressed[0]}${joiner}${suppressed[1]}"
+    else
+      note="${suppressed[0]}"
+    fi
+    echo "WARNING: running in headless mode: ${note} ignored" >&2
   fi
   center=false
   use_lolcat=false

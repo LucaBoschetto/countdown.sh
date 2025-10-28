@@ -141,6 +141,9 @@ fi
 STUB_DIR="$(mktemp -d)"
 cat >"$STUB_DIR/lolcat" <<'EOF'
 #!/usr/bin/env bash
+if [[ -n ${LOLCAT_LOG_FILE:-} ]]; then
+  echo "lolcat invoked" >>"$LOLCAT_LOG_FILE"
+fi
 exec cat "$@"
 EOF
 chmod +x "$STUB_DIR/lolcat"
@@ -308,6 +311,17 @@ assert_file_contains() {
   return 0
 }
 
+assert_file_empty() {
+  local file="$1"
+  if [[ -s "$file" ]]; then
+    echo "    Expected $file to be empty" >&2
+    echo "    Actual content:" >&2
+    cat "$file" >&2
+    return 1
+  fi
+  return 0
+}
+
 auto_test() {
   local name="$1"
   shift
@@ -427,6 +441,28 @@ test_throttle_off_has_no_warning() {
   assert_stderr_not_contains "Warning: --throttle" || return 1
 }
 
+test_lolcat_runs_by_default() {
+  local log
+  log="$(mktemp)"
+  TMP_PATHS+=("$log")
+  local base_cmd
+  base_cmd="TERM=xterm-256color ./countdown.sh 0 --nosound --no-title --throttle=0 --font term"
+  run_case 5 env LOLCAT_LOG_FILE="$log" script -q -c "$base_cmd" /dev/null
+  assert_exit_in 0 || return 1
+  assert_file_contains "$log" "lolcat invoked" || return 1
+}
+
+test_no_color_disables_lolcat() {
+  local log
+  log="$(mktemp)"
+  TMP_PATHS+=("$log")
+  local base_cmd
+  base_cmd="TERM=xterm-256color ./countdown.sh 0 --nosound --no-title --throttle=0 --font term --no-color"
+  run_case 5 env LOLCAT_LOG_FILE="$log" script -q -c "$base_cmd" /dev/null
+  assert_exit_in 0 || return 1
+  assert_file_empty "$log" || return 1
+}
+
 if ! $MANUAL_ONLY; then
   echo "Running automated countdown.sh tests ..."
   auto_test "help flag prints usage" test_help_flag
@@ -444,6 +480,8 @@ if ! $MANUAL_ONLY; then
   auto_test "combined-unit duration (0h0m2s) counts down" test_combined_units_duration
   auto_test "custom message appears in output" test_custom_message_shown
   auto_test "--throttle=off skips warning" test_throttle_off_has_no_warning
+  auto_test "lolcat runs by default when available" test_lolcat_runs_by_default
+  auto_test "--no-color skips lolcat" test_no_color_disables_lolcat
 
   echo
   printf 'Automated: %d passed, %d failed\n' "$AUTO_PASS" "$AUTO_FAIL"
