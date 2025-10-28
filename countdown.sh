@@ -271,7 +271,7 @@ EOF
 # Defaults
 font="smblock"; throttle="0.05"; until_str=""
 final_msg="TIME'S UP!"; done_cmd=""; sound_on=true; center=true; title_on=true; assume_yes=false; use_lolcat=true
-output_mode="scroll"; lolcat_spread=""; lolcat_frequency=""; overwrite_prev_width=0; overwrite_prev_height=0
+output_mode="scroll"; lolcat_spread=""; lolcat_frequency=""; overwrite_prev_width=0; overwrite_prev_height=0; interrupt_requested=false
 original_args=("$@")
 
 config_path_env=${COUNTDOWN_CONFIG:-}
@@ -482,7 +482,9 @@ prepare_frame_output(){
       ;;
     overwrite)
       if (( overwrite_prev_height > 0 )); then
-        printf '\033[%sA' "$overwrite_prev_height"
+        printf '\033[%sA\r' "$overwrite_prev_height"
+      else
+        printf '\n'
       fi
       ;;
     *)
@@ -511,7 +513,7 @@ pad_frame_for_overwrite(){
       arr[i]="${line}$(printf '%*s' "$pad" "")"
     fi
   done
-  overwrite_prev_width=$target_width
+    overwrite_prev_width=$target_width
   overwrite_prev_height=${#arr[@]}
 }
 
@@ -637,15 +639,29 @@ cleanup_exit(){
 }
 
 cleanup_interrupt(){
-  $title_on && reset_title
-  show_cursor
-  echo
+  interrupt_requested=true
+}
+
+handle_pending_interrupt(){
+  $interrupt_requested || return 0
+  if [[ "$output_mode" == "overwrite" && $overwrite_prev_height -gt 0 ]]; then
+    printf '\r\033[K'
+    local i
+    for ((i=1; i<overwrite_prev_height; i++)); do
+      printf '\n\033[K'
+    done
+    printf '\n'
+  else
+    echo
+  fi
   echo "[Interrupted]"
   exit 130
 }
 
 trap cleanup_exit EXIT
 trap cleanup_interrupt INT
+handle_winch(){ overwrite_prev_width=0; }
+trap handle_winch WINCH
 hide_cursor
 
 # ----- formatting ------------------------------------------------------------
@@ -667,6 +683,13 @@ fmt_time(){
 # Centered printing helpers
 print_centered_line(){
   local line="$1"
+  if [[ "$output_mode" == "overwrite" ]]; then
+    printf '\r\033[K'
+  fi
+  if [[ -z "$line" ]]; then
+    printf '\n'
+    return
+  fi
   if $center && [[ -n ${TERM:-} && $TERM != "dumb" ]] && command -v tput >/dev/null 2>&1; then
     local cols pad w
     cols=$(tput cols 2>/dev/null) || cols=0
@@ -702,6 +725,7 @@ prev_rem=-1
 
 # ----- main loop: one frame per second; remaining derived from end time -----
 while :; do
+  handle_pending_interrupt
   now=$(now_epoch)
   rem=$(( end_wall - now )); (( rem < 0 )) && rem=0
 
@@ -722,6 +746,9 @@ while :; do
   prepare_frame_output
   mapfile -t FRAME < <( fmt_time "$rem" | toilet -f "$font" 2>/dev/null )
   (( ${#FRAME[@]} == 0 )) && FRAME=("")
+  if [[ "$output_mode" == "overwrite" ]]; then
+    FRAME=("" "${FRAME[@]}")
+  fi
 
   pad_frame_for_overwrite FRAME
 
@@ -739,16 +766,22 @@ while :; do
     printf '\033[J'
   fi
 
+  handle_pending_interrupt
+
   (( rem == 0 )) && break
   ts_tick=$(sleepenh "$ts_tick" 1.0) || ts_tick=$(sleepenh 0)
 done
 
 # ----- final message ---------------------------------------------------------
+handle_pending_interrupt
 prepare_frame_output
 if toilet -f "$font" "$final_msg" >/dev/null 2>&1; then
   mapfile -t END < <(toilet -f "$font" "$final_msg" 2>/dev/null)
 else
   mapfile -t END < <(toilet -f big   "$final_msg" 2>/dev/null)
+fi
+if [[ "$output_mode" == "overwrite" ]]; then
+  END=("" "${END[@]}")
 fi
 pad_frame_for_overwrite END
 print_frame END
@@ -756,11 +789,14 @@ if [[ "$output_mode" == "overwrite" ]]; then
   printf '\033[J'
 fi
 
+handle_pending_interrupt
+
 # ----- finish: beeps (paplay preferred, else terminal bell), spaced with sleepenh
 if $sound_on; then
   beep_sound="/usr/share/sounds/freedesktop/stereo/complete.oga"
   ts_b=$(sleepenh 0)
   for _ in 1 2 3; do
+    handle_pending_interrupt
     if command -v paplay >/dev/null 2>&1 && [[ -f "$beep_sound" ]]; then
       paplay "$beep_sound" >/dev/null 2>&1 &
     else
@@ -772,6 +808,7 @@ fi
 
 # optional done command
 if [[ -n "$done_cmd" ]]; then
+  handle_pending_interrupt
   # run in foreground so its output appears before we exit (stderr visible)
   bash -lc "$done_cmd"
 fi
