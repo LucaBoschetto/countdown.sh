@@ -5,6 +5,7 @@
 # - Resilient to suspend/lag; next frame snaps to correct remaining time
 # - Supports durations (SS | MM:SS | HH:MM:SS | Xm | Xh | Xs | 1h30m20s | ISO8601 PT1H30M20S)
 # - Supports end time via --until=HH:MM[:SS] or --until=YYYY-MM-DDTHH:MM[:SS]
+# - Frame style options (--scroll default, --clear, --overwrite)
 # - Centered output by default (use --left to disable centering)
 # - Custom finish message (--message), optional finish command (--done-cmd),
 #   configurable sound (--sound/--silent), terminal title progress toggles
@@ -34,6 +35,7 @@ TIME (end time):
 
 Options:
   -c, --clear                 Clear screen each second (default: scroll)
+  -o, --overwrite             Redraw in place (no scroll/clear)
       --scroll                Scroll output (default)
   -l, --left                  Left-align output (default: centered)
       --center                Center output (default)
@@ -153,6 +155,19 @@ set_bool_var(){
   esac
 }
 
+set_output_mode(){
+  local raw="$1" val="${1,,}"
+  case "$val" in
+    scroll|clear|overwrite)
+      output_mode="$val"
+      ;;
+    *)
+      echo "Warning: ignoring invalid output mode value: ${raw}" >&2
+      return 1
+      ;;
+  esac
+}
+
 load_config_file(){
   local path="$1"
   [[ -f "$path" ]] || return 0
@@ -168,7 +183,17 @@ load_config_file(){
     fi
     local key_lc="${key,,}"
     case "$key_lc" in
-      clear) set_bool_var clear_enabled "$value" "$key" ;;
+      clear)
+        local tmp_bool
+        if set_bool_var tmp_bool "$value" "$key"; then
+          if [[ "$tmp_bool" == "true" ]]; then
+            output_mode="clear"
+          else
+            output_mode="scroll"
+          fi
+        fi
+        ;;
+      output_mode|mode) set_output_mode "$value" ;;
       center) set_bool_var center "$value" "$key" ;;
       color) set_bool_var use_lolcat "$value" "$key" ;;
       sound) set_bool_var sound_on "$value" "$key" ;;
@@ -211,7 +236,7 @@ write_config_file(){
   tmp=$(mktemp "${dir}/countdown.tmp.XXXXXX") || { echo "Error: unable to create temporary file in '$dir'" >&2; return 1; }
   {
     printf "# countdown.sh configuration\n"
-    printf "clear=%s\n" "$clear_enabled"
+    printf "output_mode=%s\n" "$output_mode"
     printf "center=%s\n" "$center"
     printf "color=%s\n" "$use_lolcat"
     printf "sound=%s\n" "$sound_on"
@@ -228,7 +253,7 @@ write_config_file(){
 
 print_effective_config(){
   cat <<EOF
-clear=$clear_enabled
+output_mode=$output_mode
 center=$center
 color=$use_lolcat
 sound=$sound_on
@@ -244,9 +269,9 @@ EOF
 
 # ----- args (shift-based parser; supports -t 0.05 and long/short forms) -----
 # Defaults
-font="smblock"; clear_enabled=false; throttle="0.05"; until_str=""
+font="smblock"; throttle="0.05"; until_str=""
 final_msg="TIME'S UP!"; done_cmd=""; sound_on=true; center=true; title_on=true; assume_yes=false; use_lolcat=true
-lolcat_spread=""; lolcat_frequency=""
+output_mode="scroll"; lolcat_spread=""; lolcat_frequency=""; overwrite_prev_width=0; overwrite_prev_height=0
 original_args=("$@")
 
 config_path_env=${COUNTDOWN_CONFIG:-}
@@ -301,11 +326,12 @@ positionals=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|--help) show_help; exit 0 ;;
-    -c|--clear) clear_enabled=true; shift ;;
-    --scroll|--no-clear) clear_enabled=false; shift ;;
+    -c|--clear) output_mode="clear"; shift ;;
+    --scroll) output_mode="scroll"; shift ;;
+    -o|--overwrite) output_mode="overwrite"; shift ;;
     -l|--left) center=false; shift ;;
     --center) center=true; shift ;;
-    -n|--silent|--nosound|--no-sound) sound_on=false; shift ;;
+    -n|--silent) sound_on=false; shift ;;
     --sound) sound_on=true; shift ;;
     -T|--no-title) title_on=false; shift ;;
     --title) title_on=true; shift ;;
@@ -448,7 +474,46 @@ if $headless; then
   use_lolcat=false
 fi
 
-maybe_clear(){ $clear_enabled && clear || echo; }
+prepare_frame_output(){
+  case "$output_mode" in
+    clear)
+      clear
+      printf '\n'
+      ;;
+    overwrite)
+      if (( overwrite_prev_height > 0 )); then
+        printf '\033[%sA' "$overwrite_prev_height"
+      fi
+      ;;
+    *)
+      echo
+      ;;
+  esac
+}
+
+pad_frame_for_overwrite(){
+  [[ "$output_mode" == "overwrite" ]] || return 0
+  local -n arr=$1
+  local frame_width=0 line target_width pad i
+  for line in "${arr[@]}"; do
+    (( ${#line} > frame_width )) && frame_width=${#line}
+  done
+  target_width=$frame_width
+  (( overwrite_prev_width > target_width )) && target_width=$overwrite_prev_width
+  if (( target_width <= 0 )); then
+    overwrite_prev_width=$target_width
+    return 0
+  fi
+  for i in "${!arr[@]}"; do
+    line="${arr[i]}"
+    pad=$(( target_width - ${#line} ))
+    if (( pad > 0 )); then
+      arr[i]="${line}$(printf '%*s' "$pad" "")"
+    fi
+  done
+  overwrite_prev_width=$target_width
+  overwrite_prev_height=${#arr[@]}
+}
 
 # ----- duration parsing ------------------------------------------------------
 secs_from_duration() {
@@ -562,13 +627,26 @@ if $use_lolcat && command -v lolcat >/dev/null 2>&1; then
 fi
 
 # Clean traps: reset title on exit; on Ctrl-C, reset title then exit 130
-reset_title() { printf ']0;' 1>&2; }
-if $title_on; then
-  trap 'reset_title' EXIT
-  trap 'reset_title; echo; echo "[Interrupted]"; exit 130' INT
-else
-  trap 'echo; echo "[Interrupted]"; exit 130' INT
-fi
+reset_title() { printf $'\033]0;\007' 1>&2; }
+show_cursor() { printf $'\033[?25h' 1>&2; }
+hide_cursor() { printf $'\033[?25l' 1>&2; }
+
+cleanup_exit(){
+  $title_on && reset_title
+  show_cursor
+}
+
+cleanup_interrupt(){
+  $title_on && reset_title
+  show_cursor
+  echo
+  echo "[Interrupted]"
+  exit 130
+}
+
+trap cleanup_exit EXIT
+trap cleanup_interrupt INT
+hide_cursor
 
 # ----- formatting ------------------------------------------------------------
 fmt_time(){
@@ -641,9 +719,11 @@ while :; do
   fi
   prev_rem=$rem
 
-  maybe_clear
+  prepare_frame_output
   mapfile -t FRAME < <( fmt_time "$rem" | toilet -f "$font" 2>/dev/null )
   (( ${#FRAME[@]} == 0 )) && FRAME=("")
+
+  pad_frame_for_overwrite FRAME
 
   if [[ "$throttle" == "0" || "$throttle" == "off" ]]; then
     print_frame FRAME
@@ -655,19 +735,26 @@ while :; do
       (( i == last )) || ts_line=$(sleepenh "$ts_line" "$throttle")
     done
   fi
+  if [[ "$output_mode" == "overwrite" ]]; then
+    printf '\033[J'
+  fi
 
   (( rem == 0 )) && break
   ts_tick=$(sleepenh "$ts_tick" 1.0) || ts_tick=$(sleepenh 0)
 done
 
 # ----- final message ---------------------------------------------------------
-maybe_clear
+prepare_frame_output
 if toilet -f "$font" "$final_msg" >/dev/null 2>&1; then
   mapfile -t END < <(toilet -f "$font" "$final_msg" 2>/dev/null)
 else
   mapfile -t END < <(toilet -f big   "$final_msg" 2>/dev/null)
 fi
+pad_frame_for_overwrite END
 print_frame END
+if [[ "$output_mode" == "overwrite" ]]; then
+  printf '\033[J'
+fi
 
 # ----- finish: beeps (paplay preferred, else terminal bell), spaced with sleepenh
 if $sound_on; then

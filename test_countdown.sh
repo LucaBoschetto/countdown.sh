@@ -466,6 +466,7 @@ test_no_color_disables_lolcat() {
 test_print_config_outputs_defaults() {
   run_case 5 "$SCRIPT" --print-config
   assert_exit_in 0 || return 1
+  assert_stdout_contains "output_mode=scroll" || return 1
   assert_stdout_contains "color=true" || return 1
   assert_stdout_contains "sound=true" || return 1
 }
@@ -477,14 +478,14 @@ test_config_file_applied() {
   cat >"$cfg" <<'EOF'
 color=false
 sound=false
-clear=true
+output_mode=clear
 freq=2.5
 EOF
   run_case 5 "$SCRIPT" --config="$cfg" --print-config
   assert_exit_in 0 || return 1
   assert_stdout_contains "color=false" || return 1
   assert_stdout_contains "sound=false" || return 1
-  assert_stdout_contains "clear=true" || return 1
+  assert_stdout_contains "output_mode=clear" || return 1
   assert_stdout_contains "freq=2.5" || return 1
 }
 
@@ -494,12 +495,12 @@ test_cli_overrides_config() {
   TMP_PATHS+=("$cfg")
   cat >"$cfg" <<'EOF'
 color=false
-clear=true
+output_mode=clear
 EOF
   run_case 5 "$SCRIPT" --config="$cfg" --color --scroll --print-config
   assert_exit_in 0 || return 1
   assert_stdout_contains "color=true" || return 1
-  assert_stdout_contains "clear=false" || return 1
+  assert_stdout_contains "output_mode=scroll" || return 1
 }
 
 test_save_config_writes_file() {
@@ -512,6 +513,13 @@ test_save_config_writes_file() {
   assert_file_contains "$cfg" "color=false" || return 1
   assert_file_contains "$cfg" "sound=true" || return 1
   assert_file_contains "$cfg" "title=true" || return 1
+  assert_file_contains "$cfg" "output_mode=scroll" || return 1
+}
+
+test_overwrite_mode_config() {
+  run_case 5 "$SCRIPT" -o --print-config
+  assert_exit_in 0 || return 1
+  assert_stdout_contains "output_mode=overwrite" || return 1
 }
 
 if ! $MANUAL_ONLY; then
@@ -537,6 +545,7 @@ if ! $MANUAL_ONLY; then
   auto_test "config file values applied" test_config_file_applied
   auto_test "CLI overrides config entries" test_cli_overrides_config
   auto_test "--save-config writes file" test_save_config_writes_file
+  auto_test "--overwrite selects overwrite mode" test_overwrite_mode_config
 
   echo
   printf 'Automated: %d passed, %d failed\n' "$AUTO_PASS" "$AUTO_FAIL"

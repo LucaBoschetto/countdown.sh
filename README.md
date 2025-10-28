@@ -22,7 +22,7 @@ Accurate timing comes from an in-script port of **`sleepenh`**, keeping throttle
 * Adjustable **`-t, --throttle`** (default **0.05s**) for smooth scrolling output
 * **Centered output** by default (**`-l, --left`** available)
 * Default **font:** `smblock` (customize via **`-f, --font`**)
-* Optional **`-c, --clear`** for classic flicker updates
+* Choose your frame style: default **`--scroll`**, cinematic **`-c/--clear`**, or **`-o/--overwrite`** to redraw in place
 * Optional **sound at completion** (**`-n/--silent`** to mute, **`--sound`** to force enable)
 * **`-m, --message`** to display a custom end screen
 * **`-d, --done-cmd`** to execute a command when time’s up
@@ -60,6 +60,9 @@ or your preferred package manager. If they are not installed, the script will gr
 
 # Use a different font and clear screen each tick
 ./countdown.sh 3:00 --font digital --clear
+
+# Overwrite in-place without scrolling
+./countdown.sh 10 -o
 
 # Run a command when finished
 ./countdown.sh 5 --done-cmd 'notify-send "Countdown finished!"'
