@@ -23,11 +23,12 @@ Accurate timing comes from an in-script port of **`sleepenh`**, keeping throttle
 * **Centered output** by default (**`-l, --left`** available)
 * Default **font:** `smblock` (customize via **`-f, --font`**)
 * Optional **`-c, --clear`** for classic flicker updates
-* Optional **sound at completion** (**`-n, --nosound`** to mute; multiple fallback methods)
+* Optional **sound at completion** (**`-n/--silent`** to mute, **`--sound`** to force enable)
 * **`-m, --message`** to display a custom end screen
 * **`-d, --done-cmd`** to execute a command when time’s up
-* **`-C, --no-color`** for plain text when gradients aren’t desired
+* **`-C, --no-color`** (and **`--color`**) to control gradients
 * Tune lolcat gradients with **`-p/--spread`** and **`-F/--freq`**
+* **Config file support**: `--config`, `--save-config[=path]`, `--print-config`
 * Day-aware display for timers exceeding 24h
 * Graceful suspend/resume handling (skips missed seconds)
 
@@ -64,7 +65,10 @@ or your preferred package manager. If they are not installed, the script will gr
 ./countdown.sh 5 --done-cmd 'notify-send "Countdown finished!"'
 
 # Silent run with scrolling text
-./countdown.sh 2m --nosound
+./countdown.sh 2m --silent
+
+# Save your preferred defaults
+./countdown.sh --left --no-color --sound --save-config
 ```
 
 ---
@@ -80,11 +84,5 @@ bash test_countdown.sh
 
 #### 🚧 Planned improvements
 
-- Add a config file to change defaults for:
-  - scroll vs. clear
-  - center vs. left
-  - throttle value
-  - final message
-  - finish sound on/off
-  - color vs. no-color
-  - lolcat's spread and frequency
+- Provide an interactive `--setup` wizard to guide config creation
+- Support multiple named profiles that map to different config files

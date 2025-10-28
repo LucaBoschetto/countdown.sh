@@ -365,7 +365,7 @@ test_too_many_positionals() {
 }
 
 test_font_flag_allows_plain_text() {
-  run_case 5 "$SCRIPT" 0 --nosound --no-title --throttle=0 --font term
+  run_case 5 "$SCRIPT" 0 --silent --no-title --throttle=0 --font term
   assert_exit_in 0 || return 1
   assert_stdout_contains "TIME'S UP!" || return 1
 }
@@ -379,7 +379,7 @@ test_invalid_until_format() {
 test_until_short_duration() {
   local future
   future="$(date -d 'now + 2 seconds' +%H:%M:%S)"
-  run_case 10 "$SCRIPT" --until="$future" --nosound --no-title --throttle=0 --font term
+  run_case 10 "$SCRIPT" --until="$future" --silent --no-title --throttle=0 --font term
   assert_exit_in 0 || return 1
   assert_stdout_contains "TIME'S UP!" || return 1
 }
@@ -387,7 +387,7 @@ test_until_short_duration() {
 test_duration_and_until_note() {
   local future
   future="$(date -d 'now + 2 seconds' +%H:%M:%S)"
-  run_case 10 "$SCRIPT" 1 --until="$future" --nosound --no-title --throttle=0 --font term
+  run_case 10 "$SCRIPT" 1 --until="$future" --silent --no-title --throttle=0 --font term
   assert_exit_in 0 || return 1
   assert_stderr_contains "Note: both duration" || return 1
 }
@@ -396,14 +396,14 @@ test_done_cmd_runs() {
   local tmpfile
   tmpfile="$(mktemp)"
   TMP_PATHS+=("$tmpfile")
-  run_case 5 "$SCRIPT" 0 --nosound --no-title --throttle=0 --font term \
+  run_case 5 "$SCRIPT" 0 --silent --no-title --throttle=0 --font term \
     --done-cmd="printf done >$tmpfile"
   assert_exit_in 0 || return 1
   assert_file_contains "$tmpfile" "done" || return 1
 }
 
 test_throttle_warning() {
-  run_case 5 "$SCRIPT" 0 --throttle=1 --nosound --no-title --font term
+  run_case 5 "$SCRIPT" 0 --throttle=1 --silent --no-title --font term
   assert_exit_in 0 || return 1
   assert_stderr_contains "Warning: --throttle=1" || return 1
 }
@@ -411,32 +411,32 @@ test_throttle_warning() {
 test_non_interactive_long_roll_no_prompt() {
   local past
   past="$(date -d 'now - 2 hours' +%H:%M:%S)"
-  run_case 3 "$SCRIPT" --until="$past" --nosound --no-title --throttle=0 --font term
+  run_case 3 "$SCRIPT" --until="$past" --silent --no-title --throttle=0 --font term
   assert_exit_in 0 124 || return 1
   assert_stderr_contains "Notice: Target time is" || return 1
   assert_stderr_contains "non-interactive; proceeding" || return 1
 }
 
 test_iso_duration_pt_s() {
-  run_case 5 "$SCRIPT" PT2S --nosound --no-title --throttle=0 --font term
+  run_case 5 "$SCRIPT" PT2S --silent --no-title --throttle=0 --font term
   assert_exit_in 0 || return 1
   assert_stdout_contains "TIME'S UP!" || return 1
 }
 
 test_combined_units_duration() {
-  run_case 5 "$SCRIPT" 0h0m2s --nosound --no-title --throttle=0 --font term
+  run_case 5 "$SCRIPT" 0h0m2s --silent --no-title --throttle=0 --font term
   assert_exit_in 0 || return 1
   assert_stdout_contains "TIME'S UP!" || return 1
 }
 
 test_custom_message_shown() {
-  run_case 5 "$SCRIPT" 0 --nosound --no-title --throttle=0 --font term --message="All done"
+  run_case 5 "$SCRIPT" 0 --silent --no-title --throttle=0 --font term --message="All done"
   assert_exit_in 0 || return 1
   assert_stdout_contains "All done" || return 1
 }
 
 test_throttle_off_has_no_warning() {
-  run_case 5 "$SCRIPT" 0 --throttle=off --nosound --no-title --font term
+  run_case 5 "$SCRIPT" 0 --throttle=off --silent --no-title --font term
   assert_exit_in 0 || return 1
   assert_stderr_not_contains "Warning: --throttle" || return 1
 }
@@ -446,7 +446,7 @@ test_lolcat_runs_by_default() {
   log="$(mktemp)"
   TMP_PATHS+=("$log")
   local base_cmd
-  base_cmd="TERM=xterm-256color ./countdown.sh 0 --nosound --no-title --throttle=0 --font term"
+  base_cmd="TERM=xterm-256color ./countdown.sh 0 --silent --no-title --throttle=0 --font term"
   run_case 5 env LOLCAT_LOG_FILE="$log" script -q -c "$base_cmd" /dev/null
   assert_exit_in 0 || return 1
   assert_file_contains "$log" "lolcat invoked" || return 1
@@ -457,10 +457,61 @@ test_no_color_disables_lolcat() {
   log="$(mktemp)"
   TMP_PATHS+=("$log")
   local base_cmd
-  base_cmd="TERM=xterm-256color ./countdown.sh 0 --nosound --no-title --throttle=0 --font term --no-color"
+  base_cmd="TERM=xterm-256color ./countdown.sh 0 --silent --no-title --throttle=0 --font term --no-color"
   run_case 5 env LOLCAT_LOG_FILE="$log" script -q -c "$base_cmd" /dev/null
   assert_exit_in 0 || return 1
   assert_file_empty "$log" || return 1
+}
+
+test_print_config_outputs_defaults() {
+  run_case 5 "$SCRIPT" --print-config
+  assert_exit_in 0 || return 1
+  assert_stdout_contains "color=true" || return 1
+  assert_stdout_contains "sound=true" || return 1
+}
+
+test_config_file_applied() {
+  local cfg
+  cfg="$(mktemp)"
+  TMP_PATHS+=("$cfg")
+  cat >"$cfg" <<'EOF'
+color=false
+sound=false
+clear=true
+freq=2.5
+EOF
+  run_case 5 "$SCRIPT" --config="$cfg" --print-config
+  assert_exit_in 0 || return 1
+  assert_stdout_contains "color=false" || return 1
+  assert_stdout_contains "sound=false" || return 1
+  assert_stdout_contains "clear=true" || return 1
+  assert_stdout_contains "freq=2.5" || return 1
+}
+
+test_cli_overrides_config() {
+  local cfg
+  cfg="$(mktemp)"
+  TMP_PATHS+=("$cfg")
+  cat >"$cfg" <<'EOF'
+color=false
+clear=true
+EOF
+  run_case 5 "$SCRIPT" --config="$cfg" --color --scroll --print-config
+  assert_exit_in 0 || return 1
+  assert_stdout_contains "color=true" || return 1
+  assert_stdout_contains "clear=false" || return 1
+}
+
+test_save_config_writes_file() {
+  local cfgdir cfg
+  cfgdir="$(mktemp -d)"
+  TMP_PATHS+=("$cfgdir")
+  cfg="$cfgdir/config"
+  run_case 5 "$SCRIPT" --no-config --no-color --title --sound --save-config="$cfg"
+  assert_exit_in 0 || return 1
+  assert_file_contains "$cfg" "color=false" || return 1
+  assert_file_contains "$cfg" "sound=true" || return 1
+  assert_file_contains "$cfg" "title=true" || return 1
 }
 
 if ! $MANUAL_ONLY; then
@@ -482,6 +533,10 @@ if ! $MANUAL_ONLY; then
   auto_test "--throttle=off skips warning" test_throttle_off_has_no_warning
   auto_test "lolcat runs by default when available" test_lolcat_runs_by_default
   auto_test "--no-color skips lolcat" test_no_color_disables_lolcat
+  auto_test "--print-config shows defaults" test_print_config_outputs_defaults
+  auto_test "config file values applied" test_config_file_applied
+  auto_test "CLI overrides config entries" test_cli_overrides_config
+  auto_test "--save-config writes file" test_save_config_writes_file
 
   echo
   printf 'Automated: %d passed, %d failed\n' "$AUTO_PASS" "$AUTO_FAIL"
@@ -496,11 +551,11 @@ add_manual() {
   MANUAL_CMD+=("$3")
 }
 
-add_manual "Visual: default centered output + gradient" 6 "./countdown.sh $MANUAL_DURATION --nosound --throttle=0.15"
-add_manual "Visual: left alignment" 6 "./countdown.sh $MANUAL_DURATION --left --nosound --throttle=0.15"
-add_manual "Visual: --clear screen wipe" 6 "./countdown.sh $MANUAL_DURATION --clear --nosound --throttle=0.15"
+add_manual "Visual: default centered output + gradient" 6 "./countdown.sh $MANUAL_DURATION --silent --throttle=0.15"
+add_manual "Visual: left alignment" 6 "./countdown.sh $MANUAL_DURATION --left --silent --throttle=0.15"
+add_manual "Visual: --clear screen wipe" 6 "./countdown.sh $MANUAL_DURATION --clear --silent --throttle=0.15"
 add_manual "Sound: verify completion chime/bell" 5 "./countdown.sh $MANUAL_DURATION --throttle=0 --no-title"
-add_manual "Long-roll warning or prompt" 8 "./countdown.sh --until=\"\$(date -d 'now - 2 hours' +%H:%M:%S)\" --nosound --no-title --throttle=0.1"
+add_manual "Long-roll warning or prompt" 8 "./countdown.sh --until=\"\$(date -d 'now - 2 hours' +%H:%M:%S)\" --silent --no-title --throttle=0.1"
 
 run_manual_tests() {
   local idx desc limit cmd answer result prompt
