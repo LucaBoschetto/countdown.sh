@@ -47,6 +47,8 @@ Options:
   -T, --no-title              Do not update the terminal/tab title
   -y, --yes                   Auto-confirm prompts (e.g., very long --until)
   -u TIME, --until=TIME       End at a specific clock time (see TIME formats above)
+  -p VALUE, --spread=VALUE    Pass --spread=VALUE through to lolcat gradients
+  -F VALUE, --freq=VALUE      Pass --freq=VALUE through to lolcat gradients
   -h, --help                  Show this help message
 
 Examples:
@@ -126,6 +128,7 @@ fi
 # Defaults
 font="smblock"; clear_enabled=false; throttle="0.05"; until_str=""
 final_msg="TIME'S UP!"; done_cmd=""; nosound=false; center=true; title_on=true; assume_yes=false; use_lolcat=true
+lolcat_spread=""; lolcat_frequency=""
 
 # Parse
 positionals=()
@@ -159,6 +162,24 @@ while [[ $# -gt 0 ]]; do
       font="${2:-}"; if [[ -z "$font" || "$font" == -* ]]; then echo "Error: $1 requires a value" >&2; exit 2; fi; shift 2 ;;
     --font=*)
       font="${1#*=}"; shift ;;
+
+    -p|--spread)
+      lolcat_spread="${2:-}"; if [[ -z "$lolcat_spread" || "$lolcat_spread" == -* ]]; then echo "Error: $1 requires a value" >&2; exit 2; fi
+      shift 2
+      ;;
+    -p=*|--spread=*)
+      lolcat_spread="${1#*=}"; if [[ -z "$lolcat_spread" ]]; then echo "Error: $1 requires a value" >&2; exit 2; fi
+      shift
+      ;;
+
+    -F|--freq)
+      lolcat_frequency="${2:-}"; if [[ -z "$lolcat_frequency" || "$lolcat_frequency" == -* ]]; then echo "Error: $1 requires a value" >&2; exit 2; fi
+      shift 2
+      ;;
+    -F=*|--freq=*)
+      lolcat_frequency="${1#*=}"; if [[ -z "$lolcat_frequency" ]]; then echo "Error: $1 requires a value" >&2; exit 2; fi
+      shift
+      ;;
 
     --) shift; while [[ $# -gt 0 ]]; do positionals+=("$1"); shift; done ;;
     -*) echo "Unknown option: $1" >&2; exit 2 ;;
@@ -307,7 +328,10 @@ fi
 
 # ----- global gradient via a single lolcat (stdout only; stderr stays plain)
 if $use_lolcat && command -v lolcat >/dev/null 2>&1; then
-  exec > >(lolcat)
+  lolcat_args=()
+  [[ -n "$lolcat_spread" ]] && lolcat_args+=(--spread="$lolcat_spread")
+  [[ -n "$lolcat_frequency" ]] && lolcat_args+=(--freq="$lolcat_frequency")
+  exec > >(lolcat "${lolcat_args[@]}")
 fi
 
 # Clean traps: reset title on exit; on Ctrl-C, reset title then exit 130

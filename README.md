@@ -27,6 +27,7 @@ Accurate timing comes from an in-script port of **`sleepenh`**, keeping throttle
 * **`-m, --message`** to display a custom end screen
 * **`-d, --done-cmd`** to execute a command when time’s up
 * **`-C, --no-color`** for plain text when gradients aren’t desired
+* Tune lolcat gradients with **`-p/--spread`** and **`-F/--freq`**
 * Day-aware display for timers exceeding 24h
 * Graceful suspend/resume handling (skips missed seconds)
 
@@ -79,7 +80,6 @@ bash test_countdown.sh
 
 #### 🚧 Planned improvements
 
-- Add the spread and frequency options to pass to lolcat.
 - Add a config file to change defaults for:
   - scroll vs. clear
   - center vs. left
