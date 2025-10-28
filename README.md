@@ -3,7 +3,7 @@
 A feature-rich, fully terminal-based countdown timer for Linux.
 
 Uses **`toilet`** for text rendering and **`lolcat`** for smooth color gradients.
-Accurate timing is handled by an in-script functional porting of **`sleepenh`**, so even throttled output stays in sync with real time.
+Accurate timing comes from an in-script port of **`sleepenh`**, keeping throttled output in sync with real time.
 
 <p align="center">
   <img src="docs/screenshot.png" alt="Screenshot of countdown.sh" width="600"/>
