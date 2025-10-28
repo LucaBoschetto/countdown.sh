@@ -124,7 +124,7 @@ fi
 # ----- args (shift-based parser; supports -t 0.05 and long/short forms) -----
 # Defaults
 font="smblock"; clear_enabled=false; throttle="0.05"; until_str=""
-final_msg="TIME'S UP!"; done_cmd=""; nosound=false; center=true; title_on=true; assume_yes=false
+final_msg="TIME'S UP!"; done_cmd=""; nosound=false; center=true; title_on=true; assume_yes=false; use_lolcat=true
 
 # Parse
 positionals=()
@@ -174,6 +174,19 @@ fi
 first=""; [[ ${#positionals[@]} -ge 1 ]] && first="${positionals[0]}"
 if [[ -z "$first" && -z "$until_str" ]]; then
   echo "$usage_msg" >&2; exit 1
+fi
+
+# ----- terminal capability detection ----------------------------------------
+headless=false
+if ! [ -t 1 ] || [[ -z ${TERM:-} || $TERM == "dumb" ]]; then
+  headless=true
+fi
+if $headless; then
+  if $center || $use_lolcat; then
+    echo "WARNING: running in headless mode: centering and colors ignored" >&2
+  fi
+  center=false
+  use_lolcat=false
 fi
 
 maybe_clear(){ $clear_enabled && clear || echo; }
@@ -282,7 +295,7 @@ else
 fi
 
 # ----- global gradient via a single lolcat (stdout only; stderr stays plain)
-if command -v lolcat >/dev/null 2>&1; then
+if $use_lolcat && command -v lolcat >/dev/null 2>&1; then
   exec > >(lolcat)
 fi
 
@@ -314,14 +327,16 @@ fmt_time(){
 # Centered printing helpers
 print_centered_line(){
   local line="$1"
-  if $center && command -v tput >/dev/null 2>&1; then
+  if $center && [[ -n ${TERM:-} && $TERM != "dumb" ]] && command -v tput >/dev/null 2>&1; then
     local cols pad w
-    cols=$(tput cols)
-    w=${#line}; pad=$(( (cols - w) / 2 )); (( pad < 0 )) && pad=0
-    printf "%*s%s\n" "$pad" "" "$line"
-  else
-    printf "%s\n" "$line"
+    cols=$(tput cols 2>/dev/null) || cols=0
+    if (( cols > 0 )); then
+      w=${#line}; pad=$(( (cols - w) / 2 )); (( pad < 0 )) && pad=0
+      printf "%*s%s\n" "$pad" "" "$line"
+      return
+    fi
   fi
+  printf "%s\n" "$line"
 }
 
 print_frame(){
