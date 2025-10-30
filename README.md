@@ -72,6 +72,9 @@ or your preferred package manager. If they are not installed, the script will gr
 
 # Save your preferred defaults
 ./countdown.sh --left --no-color --sound --save-config
+
+# Launch the interactive setup wizard
+./countdown.sh --setup
 ```
 
 ---
@@ -87,5 +90,4 @@ bash test_countdown.sh
 
 #### 🚧 Planned improvements
 
-- Provide an interactive `--setup` wizard to guide config creation
 - Support multiple named profiles that map to different config files

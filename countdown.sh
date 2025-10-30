@@ -60,6 +60,7 @@ Options:
       --no-config             Skip loading any config file
       --save-config[=PATH]    Write current options to config and exit
       --print-config          Show effective configuration and exit
+      --setup[=PATH]          Interactive wizard to create/update config
   -h, --help                  Show this help message
 
 Examples:
@@ -219,13 +220,24 @@ write_config_file(){
 
   if [[ -e "$path" && "$assume_yes" != "true" ]]; then
     if [ -t 0 ] && [ -t 1 ]; then
-      printf "Config file %s exists. Overwrite? [y/N] " "$path" > /dev/tty
       local reply
-      read -r reply < /dev/tty || reply=""
-      case "$reply" in
-        [yY]*) ;;
-        *) echo "Aborted." >&2; return 1 ;;
-      esac
+      while :; do
+        printf "Config file %s exists. Overwrite? (y/n): " "$path" > /dev/tty
+        if ! read -r reply < /dev/tty; then
+          echo "Aborted." >&2
+          return 1
+        fi
+        case "${reply,,}" in
+          y|yes) break ;;
+          n|no)
+            echo "Aborted." >&2
+            return 1
+            ;;
+          *)
+            echo "Please answer y or n." > /dev/tty
+            ;;
+        esac
+      done
     else
       echo "Error: refusing to overwrite '$path' without --yes in non-interactive mode" >&2
       return 1
@@ -249,6 +261,191 @@ write_config_file(){
     printf "freq=%s\n" "$lolcat_frequency"
   } >"$tmp"
   mv "$tmp" "$path" || { echo "Error: unable to write config to '$path'" >&2; rm -f "$tmp"; return 1; }
+}
+
+require_interactive(){
+  if ! [ -t 0 ] || ! [ -t 1 ]; then
+    echo "Error: --setup requires an interactive terminal (stdin/stdout must be TTYs)" >&2
+    exit 1
+  fi
+}
+
+setup_style_init(){
+  setup_style_reset=""
+  setup_style_title=""
+  setup_style_section=""
+  setup_style_prompt=""
+  setup_style_hint=""
+  setup_style_value=""
+  if [ -t 1 ]; then
+    setup_style_reset=$'\033[0m'
+    setup_style_title=$'\033[1;36m'
+    setup_style_section=$'\033[1;38;5;208m'
+    setup_style_prompt=$'\033[1m'
+    setup_style_hint=$'\033[2m'
+    setup_style_value=$'\033[36m'
+  fi
+}
+
+prompt_line(){
+  local __var="$1" __prompt="$2" __default="$3" __allow_empty="${4:-false}" input
+  local label suffix hint_skip
+  label="${setup_style_prompt}${__prompt}${setup_style_reset}"
+  suffix=""
+  if [[ -n "$__default" ]]; then
+    suffix=$(printf " (%scurrent%s: %s%s%s)" "$setup_style_hint" "$setup_style_reset" "$setup_style_value" "$__default" "$setup_style_reset")
+  elif [[ "$__allow_empty" == "true" ]]; then
+    hint_skip=$(printf "%spress Enter to skip%s" "$setup_style_hint" "$setup_style_reset")
+    suffix=" (${hint_skip})"
+  fi
+  while :; do
+    printf "%s%s%s: " "$label" "$suffix" "$setup_style_reset" > /dev/tty
+    if ! IFS= read -r input < /dev/tty; then
+      echo "Aborted." >&2
+      exit 1
+    fi
+    if [[ -z "$input" ]]; then
+      input="$__default"
+    fi
+    if [[ -z "$input" && "$__allow_empty" != "true" ]]; then
+      echo "Please enter a value." > /dev/tty
+      continue
+    fi
+    printf -v "$__var" "%s" "$input"
+    break
+  done
+}
+
+prompt_boolean(){
+  local __var="$1" __prompt="$2" __current="$3" input default_hint
+  if [[ "$__current" == "true" ]]; then
+    default_hint="${setup_style_value}yes${setup_style_reset}"
+  else
+    default_hint="${setup_style_value}no${setup_style_reset}"
+  fi
+  while :; do
+    printf "%s%s%s (current: %s) [y/n]: " "$setup_style_prompt" "$__prompt" "$setup_style_reset" "$default_hint" > /dev/tty
+    if ! IFS= read -r input < /dev/tty; then
+      echo "Aborted." >&2
+      exit 1
+    fi
+    input="${input,,}"
+    if [[ -z "$input" ]]; then
+      input="$__current"
+      printf -v "$__var" "%s" "$input"
+      break
+    fi
+    case "$input" in
+      y|yes|true|on)
+        printf -v "$__var" "true"
+        break
+        ;;
+      n|no|false|off)
+        printf -v "$__var" "false"
+        break
+        ;;
+      *)
+        echo "Please answer yes or no." > /dev/tty
+        ;;
+    esac
+  done
+}
+
+prompt_choice(){
+  local __var="$1" __prompt="$2" __current="$3" input
+  while :; do
+    printf "%s%s%s (current: %s%s%s): " "$setup_style_prompt" "$__prompt" "$setup_style_reset" "$setup_style_value" "$__current" "$setup_style_reset" > /dev/tty
+    if ! IFS= read -r input < /dev/tty; then
+      echo "Aborted." >&2
+      exit 1
+    fi
+    [[ -z "$input" ]] && input="$__current"
+    case "${input,,}" in
+      scroll|clear|overwrite)
+        printf -v "$__var" "%s" "${input,,}"
+        break
+        ;;
+      *)
+        printf "%sChoose one of: scroll, clear, overwrite.%s\n" "$setup_style_hint" "$setup_style_reset" > /dev/tty
+        ;;
+    esac
+  done
+}
+
+run_setup_wizard(){
+  require_interactive
+  setup_style_init
+
+  local default_path
+  default_path=$(expand_path "$config_path")
+  if [[ -z "$default_path" ]]; then
+    default_path=$(default_config_path)
+  fi
+
+  printf "%s=== countdown.sh setup ===%s\n" "$setup_style_title" "$setup_style_reset" > /dev/tty
+  printf "%sThis wizard will create a configuration file with your preferred defaults.%s\n" "$setup_style_hint" "$setup_style_reset" > /dev/tty
+  echo > /dev/tty
+
+  local target_path
+  prompt_line target_path "Config file path" "$default_path" false
+  target_path=$(expand_path "$target_path")
+
+  echo > /dev/tty
+  printf "%sTimer appearance%s\n" "$setup_style_section" "$setup_style_reset" > /dev/tty
+  prompt_choice output_mode "Output mode (scroll=default, clear, overwrite)" "$output_mode"
+  prompt_boolean center "Center countdown output" "$center"
+  prompt_boolean use_lolcat "Enable rainbow colors (lolcat)" "$use_lolcat"
+  prompt_line font "Toilet font" "$font" false
+
+  echo > /dev/tty
+  printf "%sBehavior%s\n" "$setup_style_section" "$setup_style_reset" > /dev/tty
+  prompt_line throttle "Throttle between lines (seconds)" "$throttle" false
+  prompt_boolean sound_on "Play completion sound" "$sound_on"
+  prompt_boolean title_on "Update terminal title" "$title_on"
+
+  echo > /dev/tty
+  printf "%sFinish behaviour%s\n" "$setup_style_section" "$setup_style_reset" > /dev/tty
+  prompt_line final_msg "Finish message" "$final_msg" true
+  prompt_line done_cmd "Command to run when finished (leave blank for none)" "$done_cmd" true
+
+  echo > /dev/tty
+  printf "%sColor tuning (optional)%s\n" "$setup_style_section" "$setup_style_reset" > /dev/tty
+  prompt_line lolcat_spread "lolcat --spread value (blank keeps default)" "$lolcat_spread" true
+  prompt_line lolcat_frequency "lolcat --freq value (blank keeps default)" "$lolcat_frequency" true
+
+  echo > /dev/tty
+  printf "%sReview%s\n" "$setup_style_section" "$setup_style_reset" > /dev/tty
+  printf "  %spath%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$target_path" "$setup_style_reset" > /dev/tty
+  printf "  %soutput_mode%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$output_mode" "$setup_style_reset" > /dev/tty
+  printf "  %scenter%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$center" "$setup_style_reset" > /dev/tty
+  printf "  %scolor%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$use_lolcat" "$setup_style_reset" > /dev/tty
+  printf "  %sfont%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$font" "$setup_style_reset" > /dev/tty
+  printf "  %sthrottle%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$throttle" "$setup_style_reset" > /dev/tty
+  printf "  %ssound%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$sound_on" "$setup_style_reset" > /dev/tty
+  printf "  %stitle%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$title_on" "$setup_style_reset" > /dev/tty
+  printf "  %smessage%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$final_msg" "$setup_style_reset" > /dev/tty
+  printf "  %sdone_cmd%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$done_cmd" "$setup_style_reset" > /dev/tty
+  printf "  %sspread%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$lolcat_spread" "$setup_style_reset" > /dev/tty
+  printf "  %sfreq%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$lolcat_frequency" "$setup_style_reset" > /dev/tty
+
+  local confirm="false"
+  if [[ "$assume_yes" == "true" ]]; then
+    confirm="true"
+  else
+    prompt_boolean confirm "Write these settings to the config file?" "true"
+  fi
+
+  if [[ "$confirm" != "true" ]]; then
+    echo "Setup cancelled. No changes written." > /dev/tty
+    exit 1
+  fi
+
+  if write_config_file "$target_path"; then
+    echo "Config saved to $target_path" >&2
+    exit 0
+  else
+    exit 1
+  fi
 }
 
 print_effective_config(){
@@ -284,6 +481,7 @@ load_config=true
 save_config=false
 save_config_path=""
 print_config=false
+run_setup=false
 
 for ((i=0; i<${#original_args[@]}; i++)); do
   arg="${original_args[i]}"
@@ -308,6 +506,16 @@ for ((i=0; i<${#original_args[@]}; i++)); do
       fi
       load_config=true
       config_path=$(expand_path "$cfg_value")
+      ;;
+    --setup)
+      run_setup=true
+      ;;
+    --setup=*)
+      run_setup=true
+      cfg_value="${arg#*=}"
+      if [[ -n "$cfg_value" ]]; then
+        config_path=$(expand_path "$cfg_value")
+      fi
       ;;
   esac
 done
@@ -353,6 +561,10 @@ while [[ $# -gt 0 ]]; do
       save_config=true; save_config_path=$(expand_path "${1#*=}"); shift ;;
     --print-config)
       print_config=true; shift ;;
+    --setup)
+      run_setup=true; shift ;;
+    --setup=*)
+      run_setup=true; config_path=$(expand_path "${1#*=}"); shift ;;
 
     -t|--throttle)
       throttle="${2:-}"; if [[ -z "$throttle" || "$throttle" == -* ]]; then echo "Error: $1 requires a value" >&2; exit 2; fi; shift 2 ;;
@@ -410,12 +622,16 @@ first=""; [[ ${#positionals[@]} -ge 1 ]] && first="${positionals[0]}"
 management_mode=false
 if $save_config; then management_mode=true; fi
 if $print_config; then management_mode=true; fi
+if $run_setup; then management_mode=true; fi
 if [[ -z "$first" && -z "$until_str" && "$management_mode" != "true" ]]; then
   echo "$usage_msg" >&2; exit 1
 fi
 if [[ "$management_mode" == "true" ]]; then
   if $print_config; then
     print_effective_config
+  fi
+  if $run_setup; then
+    run_setup_wizard
   fi
   if $save_config; then
     target_path="$config_path"
