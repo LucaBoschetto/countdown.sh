@@ -12,6 +12,14 @@
 
 set -u
 
+VERSION="1.2.0"
+UPDATE_CHECK_INTERVAL=86400  # seconds (24 hours)
+SCRIPT_NAME="countdown.sh"
+CANONICAL_REPO="LucaBoschetto/countdown.sh"
+CANONICAL_BRANCH="main"
+CANONICAL_SCRIPT_URL="https://raw.githubusercontent.com/${CANONICAL_REPO}/${CANONICAL_BRANCH}/${SCRIPT_NAME}"
+CANONICAL_MANIFEST_URL="https://raw.githubusercontent.com/${CANONICAL_REPO}/${CANONICAL_BRANCH}/latest.txt"
+
 # --- help message ------------------------------------------------------------
 show_help() {
   cat <<'EOF'
@@ -52,6 +60,7 @@ Options:
       --sound                 Enable finish sound (default)
   -T, --no-title              Disable terminal/tab title updates (default: enabled)
       --title                 Enable terminal/tab title updates (default)
+  -V, --version               Show version information and exit
   -y, --yes                   Auto-confirm prompts (e.g., very long --until)
   -u TIME, --until=TIME       End at a specific clock time (see TIME formats above)
   -p VALUE, --spread=VALUE    Pass --spread=VALUE through to lolcat gradients
@@ -60,6 +69,9 @@ Options:
       --no-config             Skip loading any config file
       --save-config[=PATH]    Write current options to config and exit
       --print-config          Show effective configuration and exit
+      --check-updates         Check for updates now and exit
+      --auto-update           Enable automatic update checks for this run
+      --no-auto-update        Disable automatic update checks for this run
       --setup[=PATH]          Interactive wizard to create/update config
   -h, --help                  Show this help message
 
@@ -73,6 +85,7 @@ Examples:
 EOF
 }
 [[ ${1:-} == "-h" || ${1:-} == "--help" ]] && { show_help; exit 0; }
+[[ ${1:-} == "-V" || ${1:-} == "--version" ]] && { printf '%s %s\n' "$SCRIPT_NAME" "$VERSION"; exit 0; }
 
 # --- portable sleepenh shim (Linux) ------------------------------------------
 # Emulates:
@@ -205,6 +218,8 @@ load_config_file(){
       done_cmd|done-cmd) done_cmd="$value" ;;
       spread|lolcat_spread) lolcat_spread="$value" ;;
       freq|frequency|lolcat_frequency) lolcat_frequency="$value" ;;
+      autoupdate|auto_update|auto-update) set_bool_var autoupdate "$value" "$key" ;;
+      update_url|update-url|updateurl) update_url="$value" ;;
       *)
         echo "Warning: unknown config key '${key}' ignored" >&2
         ;;
@@ -259,8 +274,239 @@ write_config_file(){
     printf "done_cmd=%s\n" "$done_cmd"
     printf "spread=%s\n" "$lolcat_spread"
     printf "freq=%s\n" "$lolcat_frequency"
+    printf "autoupdate=%s\n" "$autoupdate"
+    printf "update_url=%s\n" "$update_url"
   } >"$tmp"
   mv "$tmp" "$path" || { echo "Error: unable to write config to '$path'" >&2; rm -f "$tmp"; return 1; }
+}
+
+SCRIPT_ABS_PATH=""
+SCRIPT_ABS_DIR=""
+
+resolve_script_path(){
+  if [[ -n "$SCRIPT_ABS_PATH" && -n "$SCRIPT_ABS_DIR" ]]; then
+    return 0
+  fi
+  local src="${BASH_SOURCE[0]}"
+  while [[ -L "$src" ]]; do
+    local dir
+    dir=$(cd "$(dirname "$src")" && pwd)
+    src=$(readlink "$src")
+    [[ "$src" != /* ]] && src="$dir/$src"
+  done
+  SCRIPT_ABS_DIR=$(cd "$(dirname "$src")" && pwd)
+  SCRIPT_ABS_PATH="$SCRIPT_ABS_DIR/$(basename "$src")"
+}
+
+state_dir_path(){
+  if [[ -n ${COUNTDOWN_STATE_DIR:-} ]]; then
+    printf '%s\n' "$(expand_path "$COUNTDOWN_STATE_DIR")"
+    return
+  fi
+  local base="${XDG_STATE_HOME:-$HOME/.local/state}"
+  printf '%s/countdown' "$base"
+}
+
+default_update_url(){
+  if [[ -n ${COUNTDOWN_UPDATE_URL:-} ]]; then
+    printf '%s\n' "${COUNTDOWN_UPDATE_URL}"
+    return
+  fi
+  printf '%s\n' "$CANONICAL_MANIFEST_URL"
+}
+
+version_compare(){
+  local v1="$1" v2="$2"
+  local IFS='.'
+  local -a a=() b=()
+  read -r -a a <<< "$v1"
+  read -r -a b <<< "$v2"
+  local len=${#a[@]}
+  (( ${#b[@]} > len )) && len=${#b[@]}
+  local i
+  for ((i=0; i<len; i++)); do
+    local x=${a[i]:-0}
+    local y=${b[i]:-0}
+    ((10#$x > 10#$y)) && { echo 1; return; }
+    ((10#$x < 10#$y)) && { echo -1; return; }
+  done
+  echo 0
+}
+
+log_update_note(){
+  echo "$1" >&2
+}
+
+fetch_remote_file(){
+  local url="$1" dest="$2"
+  if command -v curl >/dev/null 2>&1; then
+    curl --fail --silent --show-error --location --connect-timeout 5 --max-time 20 "$url" -o "$dest"
+    return $?
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q -O "$dest" "$url"
+    return $?
+  else
+    return 127
+  fi
+}
+
+write_update_timestamp(){
+  local stamp_file="$1" now
+  now=$(date +%s 2>/dev/null || echo 0)
+  printf '%s\n' "$now" >"$stamp_file"
+}
+
+perform_update_check(){
+  local mode="$1"  # background | manual
+  local force="$2"
+  [[ -z "$mode" ]] && mode="background"
+  resolve_script_path || return
+  local script_path="$SCRIPT_ABS_PATH"
+  if [[ ! -e "$script_path" ]]; then
+    [[ "$mode" == "manual" ]] && log_update_note "[update] Unable to resolve script path; skipping."
+    return
+  fi
+  local url="$update_url"
+  [[ -z "$url" ]] && url=$(default_update_url)
+  if [[ -z "$url" ]]; then
+    [[ "$mode" == "manual" ]] && log_update_note "[update] No update source configured."
+    return
+  fi
+
+  local state_dir stamp_file
+  state_dir=$(state_dir_path)
+  stamp_file="$state_dir/last_update_check"
+  if [[ "$mode" != "manual" ]]; then
+    if [[ -r "$stamp_file" && "$force" != "true" ]]; then
+      local last ts_now
+      last=$(cat "$stamp_file" 2>/dev/null || echo 0)
+      ts_now=$(date +%s 2>/dev/null || echo 0)
+      if (( ts_now - last < UPDATE_CHECK_INTERVAL )); then
+        return
+      fi
+    fi
+  fi
+  mkdir -p "$state_dir" 2>/dev/null || true
+
+  local manifest_url="$url"
+  [[ -z "$manifest_url" ]] && manifest_url=$(default_update_url)
+  local manifest_version="" manifest_script_url=""
+
+  if [[ -n "$manifest_url" && "${manifest_url##*.}" != "sh" ]]; then
+    local manifest_tmp
+    manifest_tmp=$(mktemp "${SCRIPT_ABS_DIR}/${SCRIPT_NAME}.manifest.XXXXXX" 2>/dev/null || true)
+    if [[ -n "$manifest_tmp" ]]; then
+      if fetch_remote_file "$manifest_url" "$manifest_tmp"; then
+        manifest_version=$(grep -m1 '^version=' "$manifest_tmp" | cut -d'=' -f2-)
+        manifest_script_url=$(grep -m1 '^script_url=' "$manifest_tmp" | cut -d'=' -f2-)
+        [[ -n "$manifest_version" ]] && manifest_version=$(trim_ws "$manifest_version")
+        [[ -n "$manifest_script_url" ]] && manifest_script_url=$(trim_ws "$manifest_script_url")
+      else
+        if [[ "$mode" == "manual" ]]; then
+          log_update_note "[update] Failed to download manifest from $manifest_url."
+        fi
+      fi
+      rm -f "$manifest_tmp"
+    fi
+  fi
+
+  local remote_version="$manifest_version"
+  local download_url=""
+
+  if [[ -n "$manifest_script_url" ]]; then
+    download_url="$manifest_script_url"
+  fi
+
+  if [[ -z "$download_url" ]]; then
+    if [[ -n "$manifest_url" && "${manifest_url##*.}" == "sh" ]]; then
+      download_url="$manifest_url"
+    elif [[ -n "$manifest_url" && -z "$manifest_version" ]]; then
+      download_url="$manifest_url"
+    else
+      download_url="$CANONICAL_SCRIPT_URL"
+    fi
+  fi
+
+  if [[ -z "$download_url" ]]; then
+    [[ "$mode" == "manual" ]] && log_update_note "[update] No download URL available; skipping update."
+    return
+  fi
+
+  local cmp
+  if [[ -n "$remote_version" ]]; then
+    cmp=$(version_compare "$remote_version" "$VERSION")
+    if (( cmp <= 0 )); then
+      write_update_timestamp "$stamp_file"
+      if [[ "$mode" == "manual" ]]; then
+        if (( cmp == 0 )); then
+          log_update_note "[update] $SCRIPT_NAME is up to date (version $VERSION)."
+        else
+          log_update_note "[update] Local version ($VERSION) is newer than remote ($remote_version)."
+        fi
+      fi
+      return
+    fi
+  fi
+
+  local tmpfile
+  tmpfile=$(mktemp "${SCRIPT_ABS_DIR}/${SCRIPT_NAME}.update.XXXXXX" 2>/dev/null) || {
+    [[ "$mode" == "manual" ]] && log_update_note "[update] Unable to create temporary file in $SCRIPT_ABS_DIR."
+    return
+  }
+
+  if ! fetch_remote_file "$download_url" "$tmpfile"; then
+    rm -f "$tmpfile"
+    [[ "$mode" == "manual" ]] && log_update_note "[update] Failed to download update from $download_url."
+    return
+  fi
+
+  if [[ -z "$remote_version" ]]; then
+    remote_version=$(grep -m1 '^VERSION=' "$tmpfile" | sed -E 's/^[^"]*"([^"]*)".*/\1/')
+  fi
+
+  if [[ -z "$remote_version" ]]; then
+    rm -f "$tmpfile"
+    [[ "$mode" == "manual" ]] && log_update_note "[update] Unable to determine remote version."
+    return
+  fi
+
+  cmp=$(version_compare "$remote_version" "$VERSION")
+
+  if (( cmp <= 0 )); then
+    write_update_timestamp "$stamp_file"
+    rm -f "$tmpfile"
+    if [[ "$mode" == "manual" ]]; then
+      if (( cmp == 0 )); then
+        log_update_note "[update] $SCRIPT_NAME is up to date (version $VERSION)."
+      else
+        log_update_note "[update] Local version ($VERSION) is newer than remote ($remote_version)."
+      fi
+    fi
+    return
+  fi
+
+  chmod +x "$tmpfile" 2>/dev/null || true
+  if mv "$tmpfile" "$script_path"; then
+    write_update_timestamp "$stamp_file"
+    if [[ "$mode" == "manual" ]]; then
+      log_update_note "[update] Updated $SCRIPT_NAME to $remote_version. Restart to use the new version."
+    else
+      log_update_note "[update] Updated $SCRIPT_NAME to $remote_version. Restart to use the new version."
+    fi
+  else
+    rm -f "$tmpfile"
+    write_update_timestamp "$stamp_file"
+    if [[ "$mode" == "manual" ]]; then
+      log_update_note "[update] Update available ($VERSION → $remote_version) but failed to write $script_path."
+    else
+      log_update_note "[update] Update available ($VERSION → $remote_version) but could not write to $script_path."
+    fi
+  fi
+}
+
+kickoff_autoupdate(){
+  [[ "$autoupdate" != "true" ]] && return
+  perform_update_check "background" "false" &
 }
 
 require_interactive(){
@@ -402,6 +648,7 @@ run_setup_wizard(){
   prompt_line throttle "Throttle between lines (seconds)" "$throttle" false
   prompt_boolean sound_on "Play completion sound" "$sound_on"
   prompt_boolean title_on "Update terminal title" "$title_on"
+  prompt_boolean autoupdate "Automatically check for updates" "$autoupdate"
 
   echo > /dev/tty
   printf "%sFinish behaviour%s\n" "$setup_style_section" "$setup_style_reset" > /dev/tty
@@ -414,6 +661,10 @@ run_setup_wizard(){
   prompt_line lolcat_frequency "lolcat --freq value (blank keeps default)" "$lolcat_frequency" true
 
   echo > /dev/tty
+  printf "%sUpdates%s\n" "$setup_style_section" "$setup_style_reset" > /dev/tty
+  prompt_line update_url "Update manifest URL (blank uses official)" "$update_url" true
+
+  echo > /dev/tty
   printf "%sReview%s\n" "$setup_style_section" "$setup_style_reset" > /dev/tty
   printf "  %spath%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$target_path" "$setup_style_reset" > /dev/tty
   printf "  %soutput_mode%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$output_mode" "$setup_style_reset" > /dev/tty
@@ -423,10 +674,12 @@ run_setup_wizard(){
   printf "  %sthrottle%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$throttle" "$setup_style_reset" > /dev/tty
   printf "  %ssound%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$sound_on" "$setup_style_reset" > /dev/tty
   printf "  %stitle%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$title_on" "$setup_style_reset" > /dev/tty
+  printf "  %sautoupdate%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$autoupdate" "$setup_style_reset" > /dev/tty
   printf "  %smessage%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$final_msg" "$setup_style_reset" > /dev/tty
   printf "  %sdone_cmd%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$done_cmd" "$setup_style_reset" > /dev/tty
   printf "  %sspread%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$lolcat_spread" "$setup_style_reset" > /dev/tty
   printf "  %sfreq%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$lolcat_frequency" "$setup_style_reset" > /dev/tty
+  printf "  %supdate_url%s (manifest): %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$update_url" "$setup_style_reset" > /dev/tty
 
   local confirm="false"
   if [[ "$assume_yes" == "true" ]]; then
@@ -461,6 +714,8 @@ message=$final_msg
 done_cmd=$done_cmd
 spread=$lolcat_spread
 freq=$lolcat_frequency
+autoupdate=$autoupdate
+update_url=$update_url
 EOF
 }
 
@@ -469,6 +724,7 @@ EOF
 font="smblock"; throttle="0.05"; until_str=""
 final_msg="TIME'S UP!"; done_cmd=""; sound_on=true; center=true; title_on=true; assume_yes=false; use_lolcat=true
 output_mode="scroll"; lolcat_spread=""; lolcat_frequency=""; overwrite_prev_width=0; overwrite_prev_height=0; interrupt_requested=false
+autoupdate=true; update_url=""; check_updates=false
 original_args=("$@")
 
 config_path_env=${COUNTDOWN_CONFIG:-}
@@ -517,6 +773,9 @@ for ((i=0; i<${#original_args[@]}; i++)); do
         config_path=$(expand_path "$cfg_value")
       fi
       ;;
+    --check-updates)
+      check_updates=true
+      ;;
   esac
 done
 
@@ -527,6 +786,9 @@ fi
 
 if $load_config; then
   load_config_file "$config_path"
+fi
+if [[ -z "$update_url" ]]; then
+  update_url="$(default_update_url 2>/dev/null || echo "")"
 fi
 
 # Parse
@@ -565,6 +827,32 @@ while [[ $# -gt 0 ]]; do
       run_setup=true; shift ;;
     --setup=*)
       run_setup=true; config_path=$(expand_path "${1#*=}"); shift ;;
+    --check-updates)
+      check_updates=true; shift ;;
+    -V|--version)
+      printf '%s %s\n' "$SCRIPT_NAME" "$VERSION"
+      exit 0
+      ;;
+    --auto-update)
+      autoupdate=true; shift ;;
+    --no-auto-update)
+      autoupdate=false; shift ;;
+    --update-url)
+      update_url="${2:-}"
+      if [[ -z "$update_url" || "$update_url" == -* ]]; then
+        echo "Error: --update-url requires a value" >&2
+        exit 2
+      fi
+      shift 2
+      ;;
+    --update-url=*)
+      update_url="${1#*=}"
+      if [[ -z "$update_url" ]]; then
+        echo "Error: --update-url requires a value" >&2
+        exit 2
+      fi
+      shift
+      ;;
 
     -t|--throttle)
       throttle="${2:-}"; if [[ -z "$throttle" || "$throttle" == -* ]]; then echo "Error: $1 requires a value" >&2; exit 2; fi; shift 2 ;;
@@ -623,6 +911,7 @@ management_mode=false
 if $save_config; then management_mode=true; fi
 if $print_config; then management_mode=true; fi
 if $run_setup; then management_mode=true; fi
+if $check_updates; then management_mode=true; fi
 if [[ -z "$first" && -z "$until_str" && "$management_mode" != "true" ]]; then
   echo "$usage_msg" >&2; exit 1
 fi
@@ -632,6 +921,10 @@ if [[ "$management_mode" == "true" ]]; then
   fi
   if $run_setup; then
     run_setup_wizard
+  fi
+  if $check_updates; then
+    perform_update_check "manual" "true"
+    exit 0
   fi
   if $save_config; then
     target_path="$config_path"
@@ -649,6 +942,9 @@ if [[ "$management_mode" == "true" ]]; then
   fi
   exit 0
 fi
+
+# fire-and-forget auto-update checks (non-blocking)
+kickoff_autoupdate
 
 # --- dependency preflight ----------------------------------------------------
 deps=(toilet lolcat)

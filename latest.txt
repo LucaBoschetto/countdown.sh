@@ -1,0 +1,2 @@
+version=1.2.0
+script_url=https://raw.githubusercontent.com/LucaBoschetto/countdown.sh/main/countdown.sh

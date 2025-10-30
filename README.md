@@ -28,7 +28,9 @@ Accurate timing comes from an in-script port of **`sleepenh`**, keeping throttle
 * **`-d, --done-cmd`** to execute a command when time’s up
 * **`-C, --no-color`** (and **`--color`**) to control gradients
 * Tune lolcat gradients with **`-p/--spread`** and **`-F/--freq`**
+* **`-V, --version`** prints the current script build
 * **Config file support**: `--config`, `--save-config[=path]`, `--print-config`
+* Background **auto-update** checks keep the script fresh (configurable)
 * Day-aware display for timers exceeding 24h
 * Graceful suspend/resume handling (skips missed seconds)
 
@@ -75,6 +77,12 @@ or your preferred package manager. If they are not installed, the script will gr
 
 # Launch the interactive setup wizard
 ./countdown.sh --setup
+
+# Manually check for updates
+./countdown.sh --check-updates
+
+# Show version
+./countdown.sh --version
 ```
 
 ---
@@ -87,6 +95,15 @@ Run it from the same directory:
 ```bash
 bash test_countdown.sh
 ```
+
+#### 🔄 Automatic updates
+
+The script ships with automatic update checks enabled. Each run spawns a quick background check (at most once every 24 hours) that downloads the latest `countdown.sh` if a newer version is published.
+
+- Toggle the behavior via the setup wizard, config file (`autoupdate=true/false`), or CLI flags (`--auto-update` / `--no-auto-update`).
+- Use `--check-updates` to perform an immediate foreground check and report the result.
+- By default the script reads the official manifest at `https://raw.githubusercontent.com/LucaBoschetto/countdown.sh/main/latest.txt`.
+- Set a custom source with `update_url=<manifest-or-script URL>` in your config if you mirror the project elsewhere.
 
 #### 🚧 Planned improvements
 
