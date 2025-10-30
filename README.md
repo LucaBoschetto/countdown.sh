@@ -28,6 +28,7 @@ Accurate timing comes from an in-script port of **`sleepenh`**, keeping throttle
 * **`-d, --done-cmd`** to execute a command when time’s up
 * **`-C, --no-color`** (and **`--color`**) to control gradients
 * Tune lolcat gradients with **`-p/--spread`** and **`-F/--freq`**
+* **Logging controls** via `--debug`, `--log-level`, and `--log-file`
 * **`-V, --version`** prints the current script build
 * **Config file support**: `--config`, `--save-config[=path]`, `--print-config`
 * Background **auto-update** checks keep the script fresh (configurable)
@@ -83,6 +84,9 @@ or your preferred package manager. If they are not installed, the script will gr
 
 # Show version
 ./countdown.sh --version
+
+# Enable verbose logging to a file
+./countdown.sh 10 --debug --log-file ~/.cache/countdown.log
 ```
 
 ---
@@ -104,6 +108,7 @@ The script ships with automatic update checks enabled. Each run spawns a quick b
 - Use `--check-updates` to perform an immediate foreground check and report the result.
 - By default the script reads the official manifest at `https://raw.githubusercontent.com/LucaBoschetto/countdown.sh/main/latest.txt`.
 - Set a custom source with `update_url=<manifest-or-script URL>` in your config if you mirror the project elsewhere.
+- Use `--debug` (or `--log-level`/`--log-file`) to capture detailed updater logs for troubleshooting.
 
 #### 🚧 Planned improvements
 

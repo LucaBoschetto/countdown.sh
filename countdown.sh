@@ -12,7 +12,7 @@
 
 set -u
 
-VERSION="1.2.0"
+VERSION="1.3.0"
 UPDATE_CHECK_INTERVAL=86400  # seconds (24 hours)
 SCRIPT_NAME="countdown.sh"
 CANONICAL_REPO="LucaBoschetto/countdown.sh"
@@ -61,6 +61,9 @@ Options:
   -T, --no-title              Disable terminal/tab title updates (default: enabled)
       --title                 Enable terminal/tab title updates (default)
   -V, --version               Show version information and exit
+      --debug                 Enable verbose logging to stderr (alias for --log-level=debug)
+      --log-level=LEVEL       Set log verbosity (silent|error|info|debug)
+      --log-file=PATH         Append logs to PATH instead of stderr
   -y, --yes                   Auto-confirm prompts (e.g., very long --until)
   -u TIME, --until=TIME       End at a specific clock time (see TIME formats above)
   -p VALUE, --spread=VALUE    Pass --spread=VALUE through to lolcat gradients
@@ -220,6 +223,8 @@ load_config_file(){
       freq|frequency|lolcat_frequency) lolcat_frequency="$value" ;;
       autoupdate|auto_update|auto-update) set_bool_var autoupdate "$value" "$key" ;;
       update_url|update-url|updateurl) update_url="$value" ;;
+      log_level|loglevel|log-level) log_level="${value,,}" ;;
+      log_file|log-file|logfile) log_file="$value" ;;
       *)
         echo "Warning: unknown config key '${key}' ignored" >&2
         ;;
@@ -276,6 +281,8 @@ write_config_file(){
     printf "freq=%s\n" "$lolcat_frequency"
     printf "autoupdate=%s\n" "$autoupdate"
     printf "update_url=%s\n" "$update_url"
+    printf "log_level=%s\n" "$log_level"
+    printf "log_file=%s\n" "$log_file"
   } >"$tmp"
   mv "$tmp" "$path" || { echo "Error: unable to write config to '$path'" >&2; rm -f "$tmp"; return 1; }
 }
@@ -315,6 +322,24 @@ default_update_url(){
   printf '%s\n' "$CANONICAL_MANIFEST_URL"
 }
 
+apply_env_overrides(){
+  local env_level="${COUNTDOWN_LOG_LEVEL:-}"
+  local env_file="${COUNTDOWN_LOG_FILE:-}"
+  local env_debug="${COUNTDOWN_DEBUG:-}"
+
+  if [[ -n "$env_level" ]]; then
+    log_level="${env_level,,}"
+  fi
+
+  case "${env_debug,,}" in
+    1|true|yes|on) log_level="debug" ;;
+  esac
+
+  if [[ -n "$env_file" ]]; then
+    log_file="$env_file"
+  fi
+}
+
 version_compare(){
   local v1="$1" v2="$2"
   local IFS='.'
@@ -333,14 +358,89 @@ version_compare(){
   echo 0
 }
 
+LOG_TARGET=""
+LOG_LEVEL_NUM=2
+
+log_level_to_num(){
+  case "${1,,}" in
+    silent) echo 0 ;;
+    error)  echo 1 ;;
+    info)   echo 2 ;;
+    debug)  echo 3 ;;
+    *)      echo -1 ;;
+  esac
+}
+
+log_validate_level(){
+  local lvl="${1,,}"
+  local num
+  num=$(log_level_to_num "$lvl")
+  (( num >= 0 ))
+}
+
+ensure_parent_dir(){
+  local path="$1" dir
+  dir=$(dirname "$path")
+  mkdir -p "$dir" 2>/dev/null
+}
+
+init_logging(){
+  local lvl="${log_level,,}"
+  if ! log_validate_level "$lvl"; then
+    printf "Warning: invalid log level '%s'; defaulting to info.\n" "$log_level" >&2
+    lvl="info"
+  fi
+  log_level="$lvl"
+  LOG_LEVEL_NUM=$(log_level_to_num "$log_level")
+
+  LOG_TARGET=""
+  if [[ -n "$log_file" ]]; then
+    local resolved
+    resolved=$(expand_path "$log_file")
+    if ensure_parent_dir "$resolved" && touch "$resolved" 2>/dev/null; then
+      LOG_TARGET="$resolved"
+    else
+      printf "Warning: unable to write to log file '%s'; falling back to stderr.\n" "$log_file" >&2
+    fi
+  fi
+}
+
+log_emit(){
+  local level="${1,,}" message="$2" echo_terminal="${3:-false}"
+  local num ts line
+  if ! log_validate_level "$level"; then
+    level="info"
+  fi
+  num=$(log_level_to_num "$level")
+  (( num <= LOG_LEVEL_NUM )) || return 0
+  ts=$(date '+%Y-%m-%d %H:%M:%S')
+  line="[$ts] $message"
+  if [[ -n "$LOG_TARGET" ]]; then
+    printf '%s\n' "$line" >>"$LOG_TARGET"
+    [[ "$echo_terminal" == "true" ]] && printf '%s\n' "$line" >&2
+  else
+    printf '%s\n' "$line" >&2
+  fi
+}
+
 log_update_note(){
-  echo "$1" >&2
+  local level message echo_terminal
+  if [[ $# -eq 1 ]]; then
+    level="info"
+    message="$1"
+    echo_terminal="false"
+  else
+    level="$1"
+    message="$2"
+    echo_terminal="${3:-false}"
+  fi
+  log_emit "$level" "$message" "$echo_terminal"
 }
 
 fetch_remote_file(){
   local url="$1" dest="$2"
   if command -v curl >/dev/null 2>&1; then
-    curl --fail --silent --show-error --location --connect-timeout 5 --max-time 20 "$url" -o "$dest"
+    curl --fail --silent --location --connect-timeout 5 --max-time 20 "$url" -o "$dest"
     return $?
   elif command -v wget >/dev/null 2>&1; then
     wget -q -O "$dest" "$url"
@@ -363,13 +463,21 @@ perform_update_check(){
   resolve_script_path || return
   local script_path="$SCRIPT_ABS_PATH"
   if [[ ! -e "$script_path" ]]; then
-    [[ "$mode" == "manual" ]] && log_update_note "[update] Unable to resolve script path; skipping."
+    if [[ "$mode" == "manual" ]]; then
+      log_update_note error "[update] Unable to resolve script path; skipping." true
+    else
+      log_update_note debug "[update] Unable to resolve script path; skipping."
+    fi
     return
   fi
   local url="$update_url"
   [[ -z "$url" ]] && url=$(default_update_url)
   if [[ -z "$url" ]]; then
-    [[ "$mode" == "manual" ]] && log_update_note "[update] No update source configured."
+    if [[ "$mode" == "manual" ]]; then
+      log_update_note error "[update] No update source configured." true
+    else
+      log_update_note debug "[update] No update source configured."
+    fi
     return
   fi
 
@@ -382,6 +490,8 @@ perform_update_check(){
       last=$(cat "$stamp_file" 2>/dev/null || echo 0)
       ts_now=$(date +%s 2>/dev/null || echo 0)
       if (( ts_now - last < UPDATE_CHECK_INTERVAL )); then
+        local delta=$(( ts_now - last ))
+        log_update_note debug "[update] Skipping auto-check; last run ${delta}s ago (< ${UPDATE_CHECK_INTERVAL}s)."
         return
       fi
     fi
@@ -390,45 +500,55 @@ perform_update_check(){
 
   local manifest_url="$url"
   [[ -z "$manifest_url" ]] && manifest_url=$(default_update_url)
-  local manifest_version="" manifest_script_url=""
+  local manifest_version="" manifest_script_url="" manifest_ok="false"
+  local download_url=""
+  log_update_note debug "[update] Starting update check (mode=$mode, manifest=${manifest_url:-none})."
 
-  if [[ -n "$manifest_url" && "${manifest_url##*.}" != "sh" ]]; then
-    local manifest_tmp
-    manifest_tmp=$(mktemp "${SCRIPT_ABS_DIR}/${SCRIPT_NAME}.manifest.XXXXXX" 2>/dev/null || true)
-    if [[ -n "$manifest_tmp" ]]; then
-      if fetch_remote_file "$manifest_url" "$manifest_tmp"; then
-        manifest_version=$(grep -m1 '^version=' "$manifest_tmp" | cut -d'=' -f2-)
-        manifest_script_url=$(grep -m1 '^script_url=' "$manifest_tmp" | cut -d'=' -f2-)
-        [[ -n "$manifest_version" ]] && manifest_version=$(trim_ws "$manifest_version")
-        [[ -n "$manifest_script_url" ]] && manifest_script_url=$(trim_ws "$manifest_script_url")
-      else
-        if [[ "$mode" == "manual" ]]; then
-          log_update_note "[update] Failed to download manifest from $manifest_url."
+  if [[ -n "$manifest_url" ]]; then
+    if [[ "${manifest_url##*.}" == "sh" ]]; then
+      download_url="$manifest_url"
+    else
+      local manifest_tmp
+      manifest_tmp=$(mktemp "${SCRIPT_ABS_DIR}/${SCRIPT_NAME}.manifest.XXXXXX" 2>/dev/null || true)
+      if [[ -n "$manifest_tmp" ]]; then
+        if fetch_remote_file "$manifest_url" "$manifest_tmp"; then
+          manifest_ok="true"
+          manifest_version=$(grep -m1 '^version=' "$manifest_tmp" | cut -d'=' -f2-)
+          manifest_script_url=$(grep -m1 '^script_url=' "$manifest_tmp" | cut -d'=' -f2-)
+          [[ -n "$manifest_version" ]] && manifest_version=$(trim_ws "$manifest_version")
+          [[ -n "$manifest_script_url" ]] && manifest_script_url=$(trim_ws "$manifest_script_url")
+          log_update_note debug "[update] Manifest fetched (version=${manifest_version:-unknown}, script=${manifest_script_url:-unset})."
+        else
+          if [[ "$mode" == "manual" ]]; then
+            log_update_note error "[update] Failed to download manifest from $manifest_url." true
+          else
+            log_update_note debug "[update] Failed to download manifest from $manifest_url."
+          fi
         fi
+        rm -f "$manifest_tmp"
       fi
-      rm -f "$manifest_tmp"
     fi
   fi
 
-  local remote_version="$manifest_version"
-  local download_url=""
-
-  if [[ -n "$manifest_script_url" ]]; then
-    download_url="$manifest_script_url"
-  fi
-
   if [[ -z "$download_url" ]]; then
-    if [[ -n "$manifest_url" && "${manifest_url##*.}" == "sh" ]]; then
-      download_url="$manifest_url"
-    elif [[ -n "$manifest_url" && -z "$manifest_version" ]]; then
+    if [[ -n "$manifest_script_url" ]]; then
+      download_url="$manifest_script_url"
+    elif [[ "$manifest_ok" == "true" && -n "$manifest_url" ]]; then
       download_url="$manifest_url"
     else
       download_url="$CANONICAL_SCRIPT_URL"
     fi
   fi
 
+  local remote_version=""
+  [[ "$manifest_ok" == "true" ]] && remote_version="$manifest_version"
+
   if [[ -z "$download_url" ]]; then
-    [[ "$mode" == "manual" ]] && log_update_note "[update] No download URL available; skipping update."
+    if [[ "$mode" == "manual" ]]; then
+      log_update_note error "[update] No download URL available; skipping update." true
+    else
+      log_update_note debug "[update] No download URL available; skipping update."
+    fi
     return
   fi
 
@@ -437,11 +557,17 @@ perform_update_check(){
     cmp=$(version_compare "$remote_version" "$VERSION")
     if (( cmp <= 0 )); then
       write_update_timestamp "$stamp_file"
-      if [[ "$mode" == "manual" ]]; then
-        if (( cmp == 0 )); then
-          log_update_note "[update] $SCRIPT_NAME is up to date (version $VERSION)."
+      if (( cmp == 0 )); then
+        if [[ "$mode" == "manual" ]]; then
+          log_update_note info "[update] $SCRIPT_NAME is up to date (version $VERSION)." true
         else
-          log_update_note "[update] Local version ($VERSION) is newer than remote ($remote_version)."
+          log_update_note debug "[update] Current version $VERSION matches remote; skipping download."
+        fi
+      else
+        if [[ "$mode" == "manual" ]]; then
+          log_update_note info "[update] Local version ($VERSION) is newer than remote ($remote_version)." true
+        else
+          log_update_note debug "[update] Local version ($VERSION) is newer than remote ($remote_version); skipping download."
         fi
       fi
       return
@@ -450,15 +576,24 @@ perform_update_check(){
 
   local tmpfile
   tmpfile=$(mktemp "${SCRIPT_ABS_DIR}/${SCRIPT_NAME}.update.XXXXXX" 2>/dev/null) || {
-    [[ "$mode" == "manual" ]] && log_update_note "[update] Unable to create temporary file in $SCRIPT_ABS_DIR."
+    if [[ "$mode" == "manual" ]]; then
+      log_update_note error "[update] Unable to create temporary file in $SCRIPT_ABS_DIR." true
+    else
+      log_update_note debug "[update] Unable to create temporary file in $SCRIPT_ABS_DIR."
+    fi
     return
   }
 
   if ! fetch_remote_file "$download_url" "$tmpfile"; then
     rm -f "$tmpfile"
-    [[ "$mode" == "manual" ]] && log_update_note "[update] Failed to download update from $download_url."
+    if [[ "$mode" == "manual" ]]; then
+      log_update_note error "[update] Failed to download update from $download_url." true
+    else
+      log_update_note debug "[update] Failed to download update from $download_url."
+    fi
     return
   fi
+  log_update_note debug "[update] Downloaded candidate script from $download_url."
 
   if [[ -z "$remote_version" ]]; then
     remote_version=$(grep -m1 '^VERSION=' "$tmpfile" | sed -E 's/^[^"]*"([^"]*)".*/\1/')
@@ -466,7 +601,11 @@ perform_update_check(){
 
   if [[ -z "$remote_version" ]]; then
     rm -f "$tmpfile"
-    [[ "$mode" == "manual" ]] && log_update_note "[update] Unable to determine remote version."
+    if [[ "$mode" == "manual" ]]; then
+      log_update_note error "[update] Unable to determine remote version." true
+    else
+      log_update_note debug "[update] Unable to determine remote version."
+    fi
     return
   fi
 
@@ -475,11 +614,17 @@ perform_update_check(){
   if (( cmp <= 0 )); then
     write_update_timestamp "$stamp_file"
     rm -f "$tmpfile"
-    if [[ "$mode" == "manual" ]]; then
-      if (( cmp == 0 )); then
-        log_update_note "[update] $SCRIPT_NAME is up to date (version $VERSION)."
+    if (( cmp == 0 )); then
+      if [[ "$mode" == "manual" ]]; then
+        log_update_note info "[update] $SCRIPT_NAME is up to date (version $VERSION)." true
       else
-        log_update_note "[update] Local version ($VERSION) is newer than remote ($remote_version)."
+        log_update_note debug "[update] Downloaded version matches current version $VERSION; no update applied."
+      fi
+    else
+      if [[ "$mode" == "manual" ]]; then
+        log_update_note info "[update] Local version ($VERSION) is newer than remote ($remote_version)." true
+      else
+        log_update_note debug "[update] Downloaded version ($remote_version) older than current ($VERSION); discarding."
       fi
     fi
     return
@@ -489,23 +634,24 @@ perform_update_check(){
   if mv "$tmpfile" "$script_path"; then
     write_update_timestamp "$stamp_file"
     if [[ "$mode" == "manual" ]]; then
-      log_update_note "[update] Updated $SCRIPT_NAME to $remote_version. Restart to use the new version."
+      log_update_note info "[update] Updated $SCRIPT_NAME to $remote_version. Restart to use the new version." true
     else
-      log_update_note "[update] Updated $SCRIPT_NAME to $remote_version. Restart to use the new version."
+      log_update_note info "[update] Updated $SCRIPT_NAME to $remote_version. Restart to use the new version."
     fi
   else
     rm -f "$tmpfile"
     write_update_timestamp "$stamp_file"
     if [[ "$mode" == "manual" ]]; then
-      log_update_note "[update] Update available ($VERSION → $remote_version) but failed to write $script_path."
+      log_update_note error "[update] Update available ($VERSION → $remote_version) but failed to write $script_path." true
     else
-      log_update_note "[update] Update available ($VERSION → $remote_version) but could not write to $script_path."
+      log_update_note error "[update] Update available ($VERSION → $remote_version) but could not write to $script_path."
     fi
   fi
 }
 
 kickoff_autoupdate(){
   [[ "$autoupdate" != "true" ]] && return
+  log_update_note debug "[update] Launching background auto-update check."
   perform_update_check "background" "false" &
 }
 
@@ -618,6 +764,29 @@ prompt_choice(){
   done
 }
 
+prompt_log_level(){
+  local __var="$1" __current="$2" input
+  while :; do
+    printf "%sLog level%s (silent/error/info/debug) [current: %s%s%s]: " \
+      "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$__current" "$setup_style_reset" > /dev/tty
+    if ! IFS= read -r input < /dev/tty; then
+      echo "Aborted." >&2
+      exit 1
+    fi
+    [[ -z "$input" ]] && input="$__current"
+    input="${input,,}"
+    case "$input" in
+      silent|error|info|debug)
+        printf -v "$__var" "%s" "$input"
+        break
+        ;;
+      *)
+        printf "%sPlease choose silent, error, info, or debug.%s\n" "$setup_style_hint" "$setup_style_reset" > /dev/tty
+        ;;
+    esac
+  done
+}
+
 run_setup_wizard(){
   require_interactive
   setup_style_init
@@ -663,6 +832,8 @@ run_setup_wizard(){
   echo > /dev/tty
   printf "%sUpdates%s\n" "$setup_style_section" "$setup_style_reset" > /dev/tty
   prompt_line update_url "Update manifest URL (blank uses official)" "$update_url" true
+  prompt_log_level log_level "$log_level"
+  prompt_line log_file "Log file (blank for stderr)" "$log_file" true
 
   echo > /dev/tty
   printf "%sReview%s\n" "$setup_style_section" "$setup_style_reset" > /dev/tty
@@ -680,6 +851,8 @@ run_setup_wizard(){
   printf "  %sspread%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$lolcat_spread" "$setup_style_reset" > /dev/tty
   printf "  %sfreq%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$lolcat_frequency" "$setup_style_reset" > /dev/tty
   printf "  %supdate_url%s (manifest): %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$update_url" "$setup_style_reset" > /dev/tty
+  printf "  %slog_level%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$log_level" "$setup_style_reset" > /dev/tty
+  printf "  %slog_file%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$log_file" "$setup_style_reset" > /dev/tty
 
   local confirm="false"
   if [[ "$assume_yes" == "true" ]]; then
@@ -716,6 +889,8 @@ spread=$lolcat_spread
 freq=$lolcat_frequency
 autoupdate=$autoupdate
 update_url=$update_url
+log_level=$log_level
+log_file=$log_file
 EOF
 }
 
@@ -725,6 +900,7 @@ font="smblock"; throttle="0.05"; until_str=""
 final_msg="TIME'S UP!"; done_cmd=""; sound_on=true; center=true; title_on=true; assume_yes=false; use_lolcat=true
 output_mode="scroll"; lolcat_spread=""; lolcat_frequency=""; overwrite_prev_width=0; overwrite_prev_height=0; interrupt_requested=false
 autoupdate=true; update_url=""; check_updates=false
+log_level="info"; log_file=""
 original_args=("$@")
 
 config_path_env=${COUNTDOWN_CONFIG:-}
@@ -790,6 +966,7 @@ fi
 if [[ -z "$update_url" ]]; then
   update_url="$(default_update_url 2>/dev/null || echo "")"
 fi
+apply_env_overrides
 
 # Parse
 positionals=()
@@ -808,6 +985,52 @@ while [[ $# -gt 0 ]]; do
     -y|--yes) assume_yes=true; shift ;;
     -C|--no-color) use_lolcat=false; shift ;;
     --color) use_lolcat=true; shift ;;
+    --debug)
+      log_level="debug"; shift ;;
+    --log-level)
+      value="${2:-}"
+      if [[ -z "$value" || "$value" == -* ]]; then
+        echo "Error: --log-level requires a value" >&2
+        exit 2
+      fi
+      value="${value,,}"
+      if ! log_validate_level "$value"; then
+        echo "Error: invalid log level '$value' (expected silent, error, info, or debug)" >&2
+        exit 2
+      fi
+      log_level="$value"
+      shift 2
+      ;;
+    --log-level=*)
+      value="${1#*=}"
+      if [[ -z "$value" ]]; then
+        echo "Error: --log-level requires a value" >&2
+        exit 2
+      fi
+      value="${value,,}"
+      if ! log_validate_level "$value"; then
+        echo "Error: invalid log level '$value' (expected silent, error, info, or debug)" >&2
+        exit 2
+      fi
+      log_level="$value"
+      shift
+      ;;
+    --log-file)
+      log_file="${2:-}"
+      if [[ -z "$log_file" || "$log_file" == -* ]]; then
+        echo "Error: --log-file requires a value" >&2
+        exit 2
+      fi
+      shift 2
+      ;;
+    --log-file=*)
+      log_file="${1#*=}"
+      if [[ -z "$log_file" ]]; then
+        echo "Error: --log-file requires a value" >&2
+        exit 2
+      fi
+      shift
+      ;;
 
     --config)
       config_path="${2:-}"; if [[ -z "$config_path" || "$config_path" == -* ]]; then echo "Error: $1 requires a value" >&2; exit 2; fi
@@ -898,6 +1121,8 @@ while [[ $# -gt 0 ]]; do
     *) positionals+=("$1"); shift ;;
   esac
 done
+
+init_logging
 
 # Positional handling: TIME|DURATION only
 usage_msg="Usage: $0 [DURATION] [OPTIONS]  (try --help)"
