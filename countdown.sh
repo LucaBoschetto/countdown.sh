@@ -12,7 +12,7 @@
 
 set -u
 
-VERSION="1.3.0"
+VERSION="1.4.0"
 UPDATE_CHECK_INTERVAL=86400  # seconds (24 hours)
 SCRIPT_NAME="countdown.sh"
 CANONICAL_REPO="LucaBoschetto/countdown.sh"
@@ -63,7 +63,7 @@ Options:
   -V, --version               Show version information and exit
       --debug                 Enable verbose logging to stderr (alias for --log-level=debug)
       --log-level=LEVEL       Set log verbosity (silent|error|info|debug)
-      --log-file=PATH         Append logs to PATH instead of stderr
+      --log-file[=PATH]       Append logs to PATH instead of stderr (default path if omitted)
   -y, --yes                   Auto-confirm prompts (e.g., very long --until)
   -u TIME, --until=TIME       End at a specific clock time (see TIME formats above)
   -p VALUE, --spread=VALUE    Pass --spread=VALUE through to lolcat gradients
@@ -185,9 +185,22 @@ set_output_mode(){
   esac
 }
 
+STARTUP_DEBUG_LOG=()
+STARTUP_ENV_OVERRIDES=()
+last_loaded_config=""
+
+record_startup_note(){
+  STARTUP_DEBUG_LOG+=("$1")
+}
+
 load_config_file(){
   local path="$1"
-  [[ -f "$path" ]] || return 0
+  if [[ ! -f "$path" ]]; then
+    record_startup_note "Config load skipped; file not found: $path"
+    return 0
+  fi
+  record_startup_note "Loading config from: $path"
+  last_loaded_config="$path"
   while IFS='=' read -r key value || [[ -n "$key" ]]; do
     key=$(trim_ws "$key")
     [[ -z "$key" ]] && continue
@@ -314,6 +327,10 @@ state_dir_path(){
   printf '%s/countdown' "$base"
 }
 
+default_log_file(){
+  printf '%s/countdown.log' "$(state_dir_path)"
+}
+
 default_update_url(){
   if [[ -n ${COUNTDOWN_UPDATE_URL:-} ]]; then
     printf '%s\n' "${COUNTDOWN_UPDATE_URL}"
@@ -329,14 +346,19 @@ apply_env_overrides(){
 
   if [[ -n "$env_level" ]]; then
     log_level="${env_level,,}"
+    STARTUP_ENV_OVERRIDES+=("COUNTDOWN_LOG_LEVEL=$env_level")
   fi
 
   case "${env_debug,,}" in
-    1|true|yes|on) log_level="debug" ;;
+    1|true|yes|on)
+      log_level="debug"
+      STARTUP_ENV_OVERRIDES+=("COUNTDOWN_DEBUG=$env_debug")
+      ;;
   esac
 
   if [[ -n "$env_file" ]]; then
     log_file="$env_file"
+    STARTUP_ENV_OVERRIDES+=("COUNTDOWN_LOG_FILE=$env_file")
   fi
 }
 
@@ -399,8 +421,10 @@ init_logging(){
     resolved=$(expand_path "$log_file")
     if ensure_parent_dir "$resolved" && touch "$resolved" 2>/dev/null; then
       LOG_TARGET="$resolved"
+      log_emit debug "[startup] Log file ready: $LOG_TARGET"
     else
       printf "Warning: unable to write to log file '%s'; falling back to stderr.\n" "$log_file" >&2
+      record_startup_note "Failed to initialize log file path: $log_file"
     fi
   fi
 }
@@ -435,6 +459,39 @@ log_update_note(){
     echo_terminal="${3:-false}"
   fi
   log_emit "$level" "$message" "$echo_terminal"
+}
+
+flush_startup_debug_log(){
+  local msg
+  for msg in "${STARTUP_DEBUG_LOG[@]}"; do
+    log_emit debug "[startup] $msg"
+  done
+  STARTUP_DEBUG_LOG=()
+}
+
+log_startup_snapshot(){
+  flush_startup_debug_log
+  local args_rendered="(none)"
+  if ((${#original_args[@]})); then
+    local tmp=""
+    printf -v tmp "%q " "${original_args[@]}"
+    args_rendered="${tmp% }"
+  fi
+  log_emit debug "[startup] Script version: $VERSION (pid=$$ bash=${BASH_VERSION:-unknown})"
+  log_emit debug "[startup] Original args: $args_rendered"
+  if ((${#STARTUP_ENV_OVERRIDES[@]})); then
+    log_emit debug "[startup] Env overrides: ${STARTUP_ENV_OVERRIDES[*]}"
+  else
+    log_emit debug "[startup] Env overrides: (none)"
+  fi
+  local config_source="(not loaded)"
+  [[ -n "$last_loaded_config" ]] && config_source="$last_loaded_config"
+  log_emit debug "[startup] Config: load=${load_config} path=${config_path} source=${config_source} save=${save_config} save_path=${save_config_path:-'(default)'} print=${print_config} setup=${run_setup}"
+  local log_target="${LOG_TARGET:-stderr}"
+  log_emit debug "[startup] Logging: level=${log_level} target=${log_target}"
+  log_emit debug "[startup] Effective flags: output_mode=${output_mode} center=${center} color=${use_lolcat} sound=${sound_on} title=${title_on} throttle=${throttle} font=${font}"
+  log_emit debug "[startup] Messaging: message=${final_msg} done_cmd=${done_cmd}"
+  log_emit debug "[startup] Countdown mode: positional=${first:-'(none)'} until=${until_str:-'(none)'} assume_yes=${assume_yes} autoupdate=${autoupdate} check_updates=${check_updates}"
 }
 
 fetch_remote_file(){
@@ -906,8 +963,10 @@ original_args=("$@")
 config_path_env=${COUNTDOWN_CONFIG:-}
 if [[ -n "$config_path_env" ]]; then
   config_path=$(expand_path "$config_path_env")
+  record_startup_note "Env COUNTDOWN_CONFIG set config path to: $config_path"
 else
   config_path=$(default_config_path)
+  record_startup_note "Using default config path: $config_path"
 fi
 load_config=true
 save_config=false
@@ -986,7 +1045,9 @@ while [[ $# -gt 0 ]]; do
     -C|--no-color) use_lolcat=false; shift ;;
     --color) use_lolcat=true; shift ;;
     --debug)
-      log_level="debug"; shift ;;
+      log_level="debug"
+      record_startup_note "CLI --debug enabled (log_level=debug)"
+      shift ;;
     --log-level)
       value="${2:-}"
       if [[ -z "$value" || "$value" == -* ]]; then
@@ -999,6 +1060,7 @@ while [[ $# -gt 0 ]]; do
         exit 2
       fi
       log_level="$value"
+      record_startup_note "CLI --log-level set to: $log_level"
       shift 2
       ;;
     --log-level=*)
@@ -1013,59 +1075,91 @@ while [[ $# -gt 0 ]]; do
         exit 2
       fi
       log_level="$value"
+      record_startup_note "CLI --log-level set to: $log_level"
       shift
       ;;
     --log-file)
-      log_file="${2:-}"
-      if [[ -z "$log_file" || "$log_file" == -* ]]; then
-        echo "Error: --log-file requires a value" >&2
-        exit 2
+      next_value="${2:-}"
+      if [[ -z "$next_value" || "$next_value" == -* ]]; then
+        default_path="$(default_log_file)"
+        log_file="$default_path"
+        record_startup_note "CLI --log-file without path; defaulting to ${default_path}"
+        shift
+      else
+        log_file="$next_value"
+        record_startup_note "CLI --log-file set to: $log_file"
+        shift 2
       fi
-      shift 2
       ;;
     --log-file=*)
       log_file="${1#*=}"
       if [[ -z "$log_file" ]]; then
-        echo "Error: --log-file requires a value" >&2
-        exit 2
+        default_eq_path="$(default_log_file)"
+        log_file="$default_eq_path"
+        record_startup_note "CLI --log-file= with empty value; defaulting to ${default_eq_path}"
+      else
+        record_startup_note "CLI --log-file set to: $log_file"
       fi
       shift
       ;;
 
     --config)
       config_path="${2:-}"; if [[ -z "$config_path" || "$config_path" == -* ]]; then echo "Error: $1 requires a value" >&2; exit 2; fi
-      config_path=$(expand_path "$config_path"); shift 2 ;;
+      config_path=$(expand_path "$config_path")
+      record_startup_note "CLI --config set to: $config_path"
+      shift 2 ;;
     --config=*)
       config_path="${1#*=}"; if [[ -z "$config_path" ]]; then echo "Error: --config requires a value" >&2; exit 2; fi
-      config_path=$(expand_path "$config_path"); shift ;;
+      config_path=$(expand_path "$config_path")
+      record_startup_note "CLI --config set to: $config_path"
+      shift ;;
     --no-config)
-      load_config=false; shift ;;
+      load_config=false
+      record_startup_note "CLI --no-config specified; skipping config load"
+      shift ;;
     --save-config)
-      save_config=true; shift ;;
+      save_config=true
+      record_startup_note "CLI --save-config requested with default target"
+      shift ;;
     --save-config=*)
-      save_config=true; save_config_path=$(expand_path "${1#*=}"); shift ;;
+      save_config=true; save_config_path=$(expand_path "${1#*=}")
+      record_startup_note "CLI --save-config target: $save_config_path"
+      shift ;;
     --print-config)
-      print_config=true; shift ;;
+      print_config=true
+      record_startup_note "CLI --print-config requested"
+      shift ;;
     --setup)
-      run_setup=true; shift ;;
+      run_setup=true
+      record_startup_note "CLI --setup requested (path: default)"
+      shift ;;
     --setup=*)
-      run_setup=true; config_path=$(expand_path "${1#*=}"); shift ;;
+      run_setup=true; config_path=$(expand_path "${1#*=}")
+      record_startup_note "CLI --setup requested (path: $config_path)"
+      shift ;;
     --check-updates)
-      check_updates=true; shift ;;
+      check_updates=true
+      record_startup_note "CLI --check-updates requested"
+      shift ;;
     -V|--version)
       printf '%s %s\n' "$SCRIPT_NAME" "$VERSION"
       exit 0
       ;;
     --auto-update)
-      autoupdate=true; shift ;;
+      autoupdate=true
+      record_startup_note "CLI --auto-update enabled"
+      shift ;;
     --no-auto-update)
-      autoupdate=false; shift ;;
+      autoupdate=false
+      record_startup_note "CLI --no-auto-update enabled"
+      shift ;;
     --update-url)
       update_url="${2:-}"
       if [[ -z "$update_url" || "$update_url" == -* ]]; then
         echo "Error: --update-url requires a value" >&2
         exit 2
       fi
+      record_startup_note "CLI --update-url set to: $update_url"
       shift 2
       ;;
     --update-url=*)
@@ -1074,6 +1168,7 @@ while [[ $# -gt 0 ]]; do
         echo "Error: --update-url requires a value" >&2
         exit 2
       fi
+      record_startup_note "CLI --update-url set to: $update_url"
       shift
       ;;
 
@@ -1122,7 +1217,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+first=""
+[[ ${#positionals[@]} -ge 1 ]] && first="${positionals[0]}"
+
 init_logging
+log_startup_snapshot
 
 # Positional handling: TIME|DURATION only
 usage_msg="Usage: $0 [DURATION] [OPTIONS]  (try --help)"
@@ -1131,7 +1230,6 @@ if [[ ${#positionals[@]} -gt 1 ]]; then
   echo "$usage_msg" >&2
   exit 2
 fi
-first=""; [[ ${#positionals[@]} -ge 1 ]] && first="${positionals[0]}"
 management_mode=false
 if $save_config; then management_mode=true; fi
 if $print_config; then management_mode=true; fi
@@ -1169,6 +1267,7 @@ if [[ "$management_mode" == "true" ]]; then
 fi
 
 # fire-and-forget auto-update checks (non-blocking)
+log_emit debug "[startup] Auto-update flags: autoupdate=${autoupdate} check_updates=${check_updates}"
 kickoff_autoupdate
 
 # --- dependency preflight ----------------------------------------------------
@@ -1188,6 +1287,7 @@ if ((${#missing[@]})); then
   printf "  sudo zypper install %s\n" "${missing[*]}" >&2
   exit 1
 fi
+log_emit debug "[startup] Dependencies available: ${deps[*]}"
 
 # ----- terminal capability detection ----------------------------------------
 headless=false
@@ -1210,6 +1310,7 @@ if $headless; then
   center=false
   use_lolcat=false
 fi
+log_emit debug "[startup] Terminal capabilities: headless=${headless} center=${center} lolcat=${use_lolcat}"
 
 prepare_frame_output(){
   case "$output_mode" in
@@ -1331,6 +1432,7 @@ if [[ -n "$until_str" ]]; then
   fi
   end_wall=$parsed_end_wall
   T=$(( end_wall - start_wall )); (( T < 0 )) && T=0
+  log_emit debug "[startup] --until parsed: target='${until_str}' end_wall=${end_wall} start=${start_wall} duration=${T}s rolled_to_tomorrow=${rolled_to_tomorrow}"
   # If the computed target is far in the future (e.g., past time -> tomorrow), confirm
   threshold=$((21*3600))
   # Only prompt if the user gave a time-of-day that rolled to tomorrow
@@ -1355,6 +1457,7 @@ else
     echo "Invalid time. Use SS, MM:SS, HH:MM:SS, Xm, Xh, Xs, 1h30m20s, PT1H30M20S; or --until=..." >&2; exit 1
   fi
   end_wall=$(( start_wall + T ))
+  log_emit debug "[startup] Duration parsed: input='${first}' duration=${T}s end_wall=${end_wall} start=${start_wall}"
 fi
 
 # ----- global gradient via a single lolcat (stdout only; stderr stays plain)

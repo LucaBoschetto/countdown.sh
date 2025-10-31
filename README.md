@@ -85,7 +85,10 @@ or your preferred package manager. If they are not installed, the script will gr
 # Show version
 ./countdown.sh --version
 
-# Enable verbose logging to a file
+# Enable verbose logging to the default file (stored under XDG_STATE_HOME)
+./countdown.sh 10 --debug --log-file
+
+# Specify a custom log file path
 ./countdown.sh 10 --debug --log-file ~/.cache/countdown.log
 ```
 
@@ -108,7 +111,7 @@ The script ships with automatic update checks enabled. Each run spawns a quick b
 - Use `--check-updates` to perform an immediate foreground check and report the result.
 - By default the script reads the official manifest at `https://raw.githubusercontent.com/LucaBoschetto/countdown.sh/main/latest.txt`.
 - Set a custom source with `update_url=<manifest-or-script URL>` in your config if you mirror the project elsewhere.
-- Use `--debug` (or `--log-level`/`--log-file`) to capture detailed updater logs for troubleshooting.
+- Use `--debug` (or `--log-level`/`--log-file`) to capture detailed updater logs for troubleshooting, including a startup snapshot of all effective options, environment overrides, and resolved paths.
 
 #### 🚧 Planned improvements
 
