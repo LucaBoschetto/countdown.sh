@@ -60,6 +60,8 @@ Options:
       --sound                 Enable finish sound (default)
   -T, --no-title              Disable terminal/tab title updates (default: enabled)
       --title                 Enable terminal/tab title updates (default)
+  -e, --endtime               Show target end time in text/title (default: disabled)
+  -E, --no-endtime            Hide target end time in text/title
   -V, --version               Show version information and exit
       --debug                 Enable verbose logging to stderr (alias for --log-level=debug)
       --log-level=LEVEL       Set log verbosity (silent|error|info|debug)
@@ -228,6 +230,7 @@ load_config_file(){
       color) set_bool_var use_lolcat "$value" "$key" ;;
       sound) set_bool_var sound_on "$value" "$key" ;;
       title) set_bool_var title_on "$value" "$key" ;;
+      endtime|end_time|show_end_time) set_bool_var show_end_time "$value" "$key" ;;
       font) font="$value" ;;
       throttle) throttle="$value" ;;
       message) final_msg="$value" ;;
@@ -286,6 +289,7 @@ write_config_file(){
     printf "color=%s\n" "$use_lolcat"
     printf "sound=%s\n" "$sound_on"
     printf "title=%s\n" "$title_on"
+    printf "endtime=%s\n" "$show_end_time"
     printf "font=%s\n" "$font"
     printf "throttle=%s\n" "$throttle"
     printf "message=%s\n" "$final_msg"
@@ -489,7 +493,7 @@ log_startup_snapshot(){
   log_emit debug "[startup] Config: load=${load_config} path=${config_path} source=${config_source} save=${save_config} save_path=${save_config_path:-'(default)'} print=${print_config} setup=${run_setup}"
   local log_target="${LOG_TARGET:-stderr}"
   log_emit debug "[startup] Logging: level=${log_level} target=${log_target}"
-  log_emit debug "[startup] Effective flags: output_mode=${output_mode} center=${center} color=${use_lolcat} sound=${sound_on} title=${title_on} throttle=${throttle} font=${font}"
+  log_emit debug "[startup] Effective flags: output_mode=${output_mode} center=${center} color=${use_lolcat} sound=${sound_on} title=${title_on} throttle=${throttle} font=${font} endtime=${show_end_time}"
   log_emit debug "[startup] Messaging: message=${final_msg} done_cmd=${done_cmd}"
   log_emit debug "[startup] Countdown mode: positional=${first:-'(none)'} until=${until_str:-'(none)'} assume_yes=${assume_yes} autoupdate=${autoupdate} check_updates=${check_updates}"
 }
@@ -874,6 +878,7 @@ run_setup_wizard(){
   prompt_line throttle "Throttle between lines (seconds)" "$throttle" false
   prompt_boolean sound_on "Play completion sound" "$sound_on"
   prompt_boolean title_on "Update terminal title" "$title_on"
+  prompt_boolean show_end_time "Announce end time details" "$show_end_time"
   prompt_boolean autoupdate "Automatically check for updates" "$autoupdate"
 
   echo > /dev/tty
@@ -902,6 +907,7 @@ run_setup_wizard(){
   printf "  %sthrottle%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$throttle" "$setup_style_reset" > /dev/tty
   printf "  %ssound%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$sound_on" "$setup_style_reset" > /dev/tty
   printf "  %stitle%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$title_on" "$setup_style_reset" > /dev/tty
+  printf "  %sendtime%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$show_end_time" "$setup_style_reset" > /dev/tty
   printf "  %sautoupdate%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$autoupdate" "$setup_style_reset" > /dev/tty
   printf "  %smessage%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$final_msg" "$setup_style_reset" > /dev/tty
   printf "  %sdone_cmd%s: %s%s%s\n" "$setup_style_prompt" "$setup_style_reset" "$setup_style_value" "$done_cmd" "$setup_style_reset" > /dev/tty
@@ -938,6 +944,7 @@ center=$center
 color=$use_lolcat
 sound=$sound_on
 title=$title_on
+endtime=$show_end_time
 font=$font
 throttle=$throttle
 message=$final_msg
@@ -956,6 +963,7 @@ EOF
 font="smblock"; throttle="0.05"; until_str=""
 final_msg="TIME'S UP!"; done_cmd=""; sound_on=true; center=true; title_on=true; assume_yes=false; use_lolcat=true
 output_mode="scroll"; lolcat_spread=""; lolcat_frequency=""; overwrite_prev_width=0; overwrite_prev_height=0; interrupt_requested=false
+show_end_time=false; end_clock_label=""
 autoupdate=true; update_url=""; check_updates=false
 log_level="info"; log_file=""
 original_args=("$@")
@@ -1041,6 +1049,8 @@ while [[ $# -gt 0 ]]; do
     --sound) sound_on=true; shift ;;
     -T|--no-title) title_on=false; shift ;;
     --title) title_on=true; shift ;;
+    -e|--endtime) show_end_time=true; shift ;;
+    -E|--no-endtime) show_end_time=false; shift ;;
     -y|--yes) assume_yes=true; shift ;;
     -C|--no-color) use_lolcat=false; shift ;;
     --color) use_lolcat=true; shift ;;
@@ -1391,6 +1401,69 @@ elif [[ $tok =~ ^P(T(([0-9]+)H)?(([0-9]+)M)?(([0-9]+)S)?)$ ]]; then
 
 now_epoch() { date +%s; }
 
+# ----- end-time display helpers ---------------------------------------------
+format_end_clock(){
+  local fmt='%H:%M'
+  if (( end_wall % 60 != 0 )); then
+    fmt='%H:%M:%S'
+  fi
+  date -d "@$end_wall" "+$fmt"
+}
+
+end_time_context_label(){
+  local ref_ts="$1"
+  if (( end_wall <= 0 )); then
+    echo ""
+    return
+  fi
+  local ref_day end_day tomorrow_day ref_plus
+  ref_day=$(date -d "@$ref_ts" +%F 2>/dev/null || echo "")
+  end_day=$(date -d "@$end_wall" +%F 2>/dev/null || echo "")
+  if [[ -z "$ref_day" || -z "$end_day" ]]; then
+    echo ""
+    return
+  fi
+  if [[ "$end_day" == "$ref_day" ]]; then
+    echo ""
+    return
+  fi
+  ref_plus=$(( ref_ts + 86400 ))
+  tomorrow_day=$(date -d "@$ref_plus" +%F 2>/dev/null || echo "")
+  if [[ -n "$tomorrow_day" && "$end_day" == "$tomorrow_day" ]]; then
+    echo "tomorrow"
+    return
+  fi
+  echo "on $(date -d "@$end_wall" +%Y-%m-%d 2>/dev/null)"
+}
+
+emit_end_time_notice(){
+  [[ "$show_end_time" == "true" ]] || return
+  [[ -n "$end_clock_label" ]] || end_clock_label=$(format_end_clock)
+  local descriptor
+  descriptor=$(end_time_context_label "$start_wall")
+  if [[ -n "$descriptor" ]]; then
+    printf "This countdown ends %s at %s\n" "$descriptor" "$end_clock_label"
+  else
+    printf "This countdown ends at %s\n" "$end_clock_label"
+  fi
+}
+
+title_end_clause(){
+  if [[ "$show_end_time" != "true" ]]; then
+    echo ""
+    return
+  fi
+  [[ -n "$end_clock_label" ]] || end_clock_label=$(format_end_clock)
+  local now_ts="$1" descriptor clause
+  descriptor=$(end_time_context_label "$now_ts")
+  if [[ -n "$descriptor" ]]; then
+    clause=" • ends ${descriptor} at ${end_clock_label}"
+  else
+    clause=" • ends at ${end_clock_label}"
+  fi
+  printf '%s' "$clause"
+}
+
 # Tracks whether --until HH:MM[:SS] rolled to tomorrow
 rolled_to_tomorrow=false
 parsed_end_wall=0
@@ -1458,6 +1531,11 @@ else
   fi
   end_wall=$(( start_wall + T ))
   log_emit debug "[startup] Duration parsed: input='${first}' duration=${T}s end_wall=${end_wall} start=${start_wall}"
+fi
+
+if $show_end_time; then
+  end_clock_label=$(format_end_clock)
+  emit_end_time_notice
 fi
 
 # ----- global gradient via a single lolcat (stdout only; stderr stays plain)
@@ -1570,7 +1648,13 @@ while :; do
   rem=$(( end_wall - now )); (( rem < 0 )) && rem=0
 
   # Terminal title (unless disabled)
-  $title_on && printf "\033]0;⏳ %s\007" "$(fmt_time "$rem")" 1>&2
+  if $title_on; then
+    if $show_end_time; then
+      printf "\033]0;⏳ %s%s\007" "$(fmt_time "$rem")" "$(title_end_clause "$now")" 1>&2
+    else
+      printf "\033]0;⏳ %s\007" "$(fmt_time "$rem")" 1>&2
+    fi
+  fi
 
   # Skip duplicate frames (can happen right after resume)
   if (( rem == prev_rem )); then

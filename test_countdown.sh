@@ -522,6 +522,29 @@ test_overwrite_mode_config() {
   assert_stdout_contains "output_mode=overwrite" || return 1
 }
 
+test_endtime_duration_message() {
+  run_case 5 "$SCRIPT" 0 --silent --no-title --throttle=0 --font term --endtime
+  assert_exit_in 0 || return 1
+  assert_stdout_contains "This countdown ends at" || return 1
+}
+
+test_endtime_tomorrow_message() {
+  local past
+  past="$(date -d 'now - 1 hour' +%H:%M:%S)"
+  run_case 4 "$SCRIPT" --until="$past" --silent --no-title --throttle=0 --font term --endtime
+  assert_exit_in 0 124 || return 1
+  assert_stdout_contains "This countdown ends tomorrow at" || return 1
+}
+
+test_endtime_specific_date_message() {
+  local future_date future
+  future_date="$(date -d 'now + 2 days' +%Y-%m-%d)"
+  future="$(date -d 'now + 2 days + 1 minute' +%Y-%m-%dT%H:%M:%S)"
+  run_case 4 "$SCRIPT" --until="$future" --silent --no-title --throttle=0 --font term --endtime
+  assert_exit_in 0 124 || return 1
+  assert_stdout_contains "This countdown ends on ${future_date} at" || return 1
+}
+
 if ! $MANUAL_ONLY; then
   echo "Running automated countdown.sh tests ..."
   auto_test "help flag prints usage" test_help_flag
@@ -546,6 +569,9 @@ if ! $MANUAL_ONLY; then
   auto_test "CLI overrides config entries" test_cli_overrides_config
   auto_test "--save-config writes file" test_save_config_writes_file
   auto_test "--overwrite selects overwrite mode" test_overwrite_mode_config
+  auto_test "--endtime prints same-day notice" test_endtime_duration_message
+  auto_test "--endtime notes tomorrow target" test_endtime_tomorrow_message
+  auto_test "--endtime notes explicit future date" test_endtime_specific_date_message
 
   echo
   printf 'Automated: %d passed, %d failed\n' "$AUTO_PASS" "$AUTO_FAIL"

@@ -24,6 +24,7 @@ Accurate timing comes from an in-script port of **`sleepenh`**, keeping throttle
 * Default **font:** `smblock` (customize via **`-f, --font`**)
 * Choose your frame style: default **`--scroll`**, cinematic **`-c/--clear`**, or **`-o/--overwrite`** to redraw in place
 * Optional **sound at completion** (**`-n/--silent`** to mute, **`--sound`** to force enable)
+* Optional **end-time announcement** via **`-e/--endtime`** (persist via config)
 * **`-m, --message`** to display a custom end screen
 * **`-d, --done-cmd`** to execute a command when time’s up
 * **`-C, --no-color`** (and **`--color`**) to control gradients
