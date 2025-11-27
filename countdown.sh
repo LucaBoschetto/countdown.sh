@@ -12,7 +12,7 @@
 
 set -u
 
-VERSION="1.4.0"
+VERSION="1.5.0"
 UPDATE_CHECK_INTERVAL=86400  # seconds (24 hours)
 SCRIPT_NAME="countdown.sh"
 CANONICAL_REPO="LucaBoschetto/countdown.sh"
